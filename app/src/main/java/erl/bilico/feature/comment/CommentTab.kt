@@ -35,8 +35,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -142,14 +144,20 @@ fun CommentTab(
                 .fillMaxWidth(),
         ) {
             if (flat) {
-                Box(
-                    Modifier.matchParentSize()
-                        .padding(top = topInset)
-                        .background(
-                            COUITheme.colorScheme.surfaceContainer,
-                            RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                        ),
-                )
+                val color = COUITheme.colorScheme.surfaceContainer
+                val shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+                val fadeHeight = topInset.coerceIn(0.dp, 24.dp)
+                val panel = Modifier.matchParentSize().padding(top = topInset - fadeHeight)
+                if (fadeHeight > 0.dp) {
+                    // Start the panel behind the glass bar so its gradient reaches into the sampled backdrop.
+                    val fadeEnd = with(LocalDensity.current) { fadeHeight.toPx() }
+                    val brush = remember(color, fadeEnd) {
+                        Brush.verticalGradient(listOf(color.copy(alpha = 0f), color), endY = fadeEnd)
+                    }
+                    Box(panel.background(brush, shape))
+                } else {
+                    Box(panel.background(color, shape))
+                }
             }
             when {
                 state.isLoading && state.items.isEmpty() ->
