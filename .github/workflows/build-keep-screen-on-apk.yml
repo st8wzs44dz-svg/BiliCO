@@ -33,13 +33,20 @@ jobs:
           ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository :coui-nav:publishAndroidPublicationToLocalRepository :coui-nav:publishKotlinMultiplatformPublicationToLocalRepository :coui-navigation3-ui:publishAndroidPublicationToLocalRepository :coui-navigation3-ui:publishKotlinMultiplatformPublicationToLocalRepository
           find build/repository/local -name "*.aar" | head -30
       # Sign the assembled APK with the persistent BiliCO update key before distribution.
-      - name: Assemble unsigned debug APK
+      - name: Assemble unsigned preview APK
         working-directory: BiliCO
-        run: ./gradlew :app:assembleDebug -PbilicoUnsignedDebug=true --stacktrace
+        run: ./gradlew :app:assemblePreview --stacktrace
       - name: Upload the unsigned APK
         uses: actions/upload-artifact@v4
         with:
           name: BiliCO-unsigned-APK
-          path: BiliCO/app/build/outputs/apk/debug/app-debug-unsigned.apk
+          path: BiliCO/app/build/outputs/apk/preview/app-preview-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload the preview R8 mapping
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiliCO-preview-R8-mapping
+          path: BiliCO/app/build/outputs/mapping/preview/mapping.txt
           if-no-files-found: error
           retention-days: 7

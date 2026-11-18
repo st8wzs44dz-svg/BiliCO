@@ -24,8 +24,8 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 128
-        versionName = "0.2.11-pre.7"
+        versionCode = 129
+        versionName = "0.2.11-pre.8"
     }
 
     signingConfigs {
@@ -58,6 +58,13 @@ android {
             if (providers.gradleProperty("bilicoUnsignedDebug").orNull == "true") {
                 signingConfig = null
             }
+        }
+        create("preview") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            isShrinkResources = false
+            matchingFallbacks += "release"
+            signingConfig = null
         }
     }
 
