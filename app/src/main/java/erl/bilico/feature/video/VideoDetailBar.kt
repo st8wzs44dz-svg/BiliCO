@@ -9,13 +9,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -23,7 +23,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -105,13 +104,8 @@ internal fun VideoDetailBar(
     val barBackdrop = if (BlurEffectsEnabled) backdrop else null
     val fieldColors = SearchBarDefaults.searchBarColors(backgroundColor = Color.Transparent)
 
-    // 「评论」后面带上评论数；数字没拿到之前维持原来的两段文案。
-    val tabs = remember(commentCount) {
-        if (commentCount > 0L) {
-            listOf(DETAIL_TABS[0], "评论 ${Formatters.formatStat(commentCount)}")
-        } else {
-            DETAIL_TABS
-        }
+    val commentCountText = remember(commentCount) {
+        if (commentCount > 0L) Formatters.formatStat(commentCount) else null
     }
     val density = LocalDensity.current
     val minCapsulePx = with(density) { MIN_DANMAKU_CAPSULE_WIDTH.roundToPx() }
@@ -153,9 +147,9 @@ internal fun VideoDetailBar(
                         translationX = -size.width * collapse
                     },
                 ) {
-                    ChipTab(tabs[0], selected == 0, onClick = { onSelect(0) }, backdrop = barBackdrop)
+                    ChipTab("简介", selected == 0, onClick = { onSelect(0) }, backdrop = barBackdrop)
                     VideoCommentChip(
-                        label = tabs[1],
+                        count = commentCountText,
                         selected = selected == 1,
                         sort = commentSort ?: CommentSort.Hot,
                         sortEnabled = sortVisible && !composing,
@@ -283,7 +277,7 @@ internal fun VideoDetailBar(
 /** One COUI surface with separate tab and sort hit targets. */
 @Composable
 private fun VideoCommentChip(
-    label: String,
+    count: String?,
     selected: Boolean,
     sort: CommentSort,
     sortEnabled: Boolean,
@@ -294,32 +288,47 @@ private fun VideoCommentChip(
 ) {
     val scheme = COUITheme.colorScheme
     val isHot = sort == CommentSort.Hot
+    val tabLabel = if (count == null) "评论" else "评论 $count"
+    val textStyle = ChipTabDefaults.textStyle()
     val sortInteractive by remember(reveal) { derivedStateOf { reveal.value >= 0.9f } }
     Box {
         ChipTab(
             label = "",
             selected = selected,
             onClick = onSelect,
-            modifier = Modifier.matchParentSize().semantics { contentDescription = label },
+            modifier = Modifier.matchParentSize().semantics { contentDescription = tabLabel },
             backdrop = backdrop,
         )
         Layout(
             modifier = Modifier.height(ChipTabDefaults.Height),
             content = {
-                Text(
-                    text = label,
-                    modifier = Modifier.clearAndSetSemantics {},
-                    style = ChipTabDefaults.textStyle(),
-                    color = scheme.onSurface,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    modifier = Modifier.fillMaxHeight().clearAndSetSemantics {},
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "评论",
+                        style = textStyle,
+                        color = scheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (count != null) {
+                        Text(
+                            text = count,
+                            style = textStyle,
+                            color = scheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .graphicsLayer { alpha = ((reveal.value - 0.65f) / 0.35f).coerceIn(0f, 1f) }
-                        .clip(CircleShape)
-                        .background(scheme.primary.copy(alpha = 0.12f))
                         .clickable(enabled = sortEnabled && sortInteractive, role = Role.Button, onClick = onToggleSort)
                         .semantics {
                             contentDescription = if (isHot) "当前最热，切换到最新" else "当前最新，切换到最热"
@@ -343,14 +352,14 @@ private fun VideoCommentChip(
                 .coerceIn(0, constraints.maxWidth - start)
             val available = constraints.maxWidth - start - end
             val slot = desiredSlot.coerceIn(0, available)
-            val labelPlaceable = measurables[0].measure(Constraints(maxWidth = available - slot, maxHeight = constraints.maxHeight))
-            val iconHeight = minOf(28.dp.roundToPx(), constraints.maxHeight)
-            val icon = if (slot > 0) measurables[1].measure(Constraints.fixed(slot, iconHeight)) else null
-            val width = start + labelPlaceable.width + slot + end
             val height = constraints.maxHeight
+            val text = measurables[0].measure(Constraints(maxWidth = available - slot, maxHeight = height))
+            val icon = if (slot > 0) measurables[1].measure(Constraints.fixed(slot, height)) else null
+            val width = start + text.width + slot + end
             layout(width, height) {
-                labelPlaceable.placeRelative(start, (height - labelPlaceable.height) / 2)
-                icon?.placeRelative(start + labelPlaceable.width, (height - iconHeight) / 2)
+                // The text row and the icon slot both center their contents across the full chip height.
+                text.placeRelative(start, 0)
+                icon?.placeRelative(start + text.width, 0)
             }
         }
     }
@@ -384,7 +393,6 @@ private fun commentSortIcon(name: String, data: String): ImageVector =
         )
         .build()
 
-private val DETAIL_TABS = listOf("简介", "评论")
 private val DETAIL_BAR_GAP = 6.dp
 private val MIN_DANMAKU_CAPSULE_WIDTH = 124.dp
 
