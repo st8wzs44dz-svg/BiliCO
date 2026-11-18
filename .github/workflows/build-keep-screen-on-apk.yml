@@ -8,54 +8,46 @@ permissions:
   contents: read
 
 jobs:
-  apk:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout BiliCO
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           path: BiliCO
           persist-credentials: false
-      - name: Checkout COUI 17
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           repository: Costben/coui17
           ref: 14d1258b2076f9d9d5f5b47a8a4b71dcb5a6249a
-          path: coui
           persist-credentials: false
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
+          path: coui
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - name: Set up Gradle 9.8.2
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '9.8.2'
-          cache-disabled: true
-      - name: Install Android SDK 37
-        run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
-      - name: Publish the COUI Android libraries locally
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Publish COUI 17 artifacts to local repo
         working-directory: coui
-        run: >-
-          gradle publishAndroidPublicationToLocalRepository
-          publishKotlinMultiplatformPublicationToLocalRepository
-          -x dokkaGenerate --no-daemon --no-configuration-cache --max-workers=2
-      - name: Assemble the BiliCO test APK
+        run: |
+          ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository :coui-nav:publishAndroidPublicationToLocalRepository :coui-nav:publishKotlinMultiplatformPublicationToLocalRepository :coui-navigation3-ui:publishAndroidPublicationToLocalRepository :coui-navigation3-ui:publishKotlinMultiplatformPublicationToLocalRepository
+          find build/repository/local -name "*.aar" | head -30
+      - name: Assemble debug APK
         working-directory: BiliCO
-        run: gradle :app:assembleDebug --no-daemon --max-workers=2
+        run: ./gradlew :app:assembleDebug --stacktrace
       - name: Verify and stage the APK
         working-directory: BiliCO
         run: |
           apk=app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$apk"
-          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$apk" | grep "^package:"
+          mapfile -t signers < <(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner | sort -V)
+          signer="${signers[-1]}"
+          "$signer" verify --verbose --print-certs "$apk"
+          "$(dirname "$signer")/aapt" dump badging "$apk" | grep "^package:"
           mkdir -p dist
           cp "$apk" dist/BiliCO-0.2.11-pre-keep-screen-on-debug.apk
           sha256sum dist/*.apk
       - name: Upload the APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: BiliCO-keep-screen-on-APK
           path: BiliCO/dist/*.apk
