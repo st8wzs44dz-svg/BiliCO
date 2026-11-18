@@ -5,6 +5,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,8 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
@@ -33,9 +37,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import erl.bilico.data.model.Comment
@@ -84,6 +90,7 @@ fun CommentTab(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val account by container.session.account.collectAsStateWithLifecycle()
     val currentMid = account?.mid ?: container.session.mid()
+    val flat = type == 1 // 视频和番剧评论共用的类型。
     val localThreadController = remember { ReplyThreadController() }
     val threadController = replyThreadController ?: localThreadController
     var composeTarget by remember { mutableStateOf<ComposeTarget?>(null) }
@@ -134,6 +141,16 @@ fun CommentTab(
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
+            if (flat) {
+                Box(
+                    Modifier.matchParentSize()
+                        .padding(top = topInset)
+                        .background(
+                            COUITheme.colorScheme.surfaceContainer,
+                            RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                        ),
+                )
+            }
             when {
                 state.isLoading && state.items.isEmpty() ->
                     LoadingState(Modifier.padding(top = topInset))
@@ -152,14 +169,16 @@ fun CommentTab(
                     state = listState,
                     modifier = Modifier.fillMaxSize().scrollEndHaptic(),
                     contentPadding = PaddingValues(
-                        start = 16.dp,
+                        start = if (flat) 20.dp else 16.dp,
                         top = 12.dp + topInset,
-                        end = 16.dp,
+                        end = if (flat) 20.dp else 16.dp,
                         bottom = 88.dp + bottomInset,
                     ),
                 ) {
                     item(key = "header") {
-                        Row(
+                        if (flat) {
+                            VideoCommentSortChips(state.sort, viewModel::selectSort)
+                        } else Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 4.dp),
@@ -177,14 +196,8 @@ fun CommentTab(
                             )
                         }
                     }
-                    items(state.items, key = { it.id }) { comment ->
-                        // 灰底页面 → 白卡片 → 浅灰楼中楼，三层配色照微博评论那套来。
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp),
-                            insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
-                        ) {
+                    itemsIndexed(state.items, key = { _, comment -> comment.id }, contentType = { _, _ -> "comment" }) { index, comment ->
+                        val commentRow: @Composable () -> Unit = {
                             BiliCommentItem(
                                 comment = comment,
                                 onLike = {
@@ -215,7 +228,17 @@ fun CommentTab(
                                 onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
                                 currentMid = currentMid,
                                 onDelete = { viewModel.deleteComment(comment) },
+                                flat = flat,
+                                showDivider = flat && index < state.items.lastIndex,
                             )
+                        }
+                        if (flat) {
+                            Box(Modifier.fillMaxWidth().padding(top = 12.dp)) { commentRow() }
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                                insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                            ) { commentRow() }
                         }
                     }
                     when {
@@ -366,5 +389,37 @@ fun CommentTab(
             onDismiss = { imageViewer = null },
         )
     }
+    }
+}
+
+@Composable
+private fun VideoCommentSortChips(sort: CommentSort, onSelectSort: (CommentSort) -> Unit) {
+    Row(
+        modifier = Modifier.selectableGroup().padding(bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        VideoCommentSortChip("最热", sort == CommentSort.Hot) { onSelectSort(CommentSort.Hot) }
+        VideoCommentSortChip("最新", sort == CommentSort.New) { onSelectSort(CommentSort.New) }
+    }
+}
+
+@Composable
+private fun VideoCommentSortChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val colors = COUITheme.colorScheme
+    Box(
+        modifier = Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) colors.primary.copy(alpha = 0.12f) else colors.surfaceContainerHigh)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 15.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (selected) colors.primary else colors.onSurface,
+        )
     }
 }

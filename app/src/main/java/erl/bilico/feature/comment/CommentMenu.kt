@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -33,12 +34,13 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 internal fun rememberCommentMenuItems(
     comment: Comment,
     enabled: Boolean,
+    canDelete: Boolean,
     onRequestDelete: () -> Unit,
 ): List<CouiMenuItem> {
     val context = LocalContext.current
     @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
-    return remember(comment.id, comment.content, enabled, context, clipboard) {
+    return remember(comment.id, comment.content, enabled, canDelete, context, clipboard) {
         if (!enabled) {
             emptyList()
         } else {
@@ -54,7 +56,9 @@ internal fun rememberCommentMenuItems(
                         ),
                     )
                 }
-                add(CouiMenuItem("删除评论", onRequestDelete, group = if (isEmpty()) 0 else 1))
+                if (canDelete) {
+                    add(CouiMenuItem("删除评论", onRequestDelete, group = if (isEmpty()) 0 else 1))
+                }
             }
         }
     }
@@ -64,6 +68,7 @@ internal fun rememberCommentMenuItems(
 internal fun CommentMoreButton(
     menuItems: List<CouiMenuItem>,
     modifier: Modifier = Modifier,
+    horizontal: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
@@ -82,7 +87,7 @@ internal fun CommentMoreButton(
             Icon(
                 imageVector = COUIIcons.More,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(18.dp).then(if (horizontal) Modifier.rotate(90f) else Modifier),
                 tint = COUITheme.colorScheme.onSurfaceSecondary,
             )
         }

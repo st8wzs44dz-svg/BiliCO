@@ -26,20 +26,29 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import erl.bilico.data.model.Comment
@@ -52,24 +61,24 @@ import erl.bilico.ui.components.LoadingImage
 import erl.bilico.ui.imageOrigin
 import erl.bilico.ui.components.RichCommentText
 import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.HorizontalDivider
 import io.github.suqi8.coui.kmp.basic.TabRowDefaults
 import io.github.suqi8.coui.kmp.basic.TabRowWithContour
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.preciseClickAnchor
 import io.github.suqi8.coui.kmp.basic.rememberPreciseClickState
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
+import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.theme.COUITheme
 
 /** 评论正文默认折叠到这个行数，超出才给一行「展开」。 */
 private const val FOLDED_COMMENT_LINES = 8
 
-/**
- * 标准评论卡片：严格参照目标样式还原——
- * - 左栏圆形头像，右栏顶部左侧为「完整不截断用户名 + 实心几何 LV 徽章」与第二行「日期 · IP属地」；
- * - 右上角为装扮角色立绘 + 方折数码号码牌（NO. / 032469）；
- * - 中部为高对比度评论正文与带图评论缩略图（支持点击看大图）；
- * - 底部操作栏左侧为左弯回复图标 +「回复」，右侧为点踩与点赞图标 + 计数；
- * - 下方圆角灰底卡片展示子回复预览与「共N条回复」。
- */
+private val LocationPrefix = Regex("^IP\\s*属地\\s*[:：]\\s*", RegexOption.IGNORE_CASE)
+private val CommentAvatarGap = 12.dp
+
+/** 视频主评论使用平铺样式，回复详情和其他入口共用原有评论内容。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun BiliCommentItem(
@@ -85,6 +94,8 @@ internal fun BiliCommentItem(
     currentMid: Long = 0L,
     onDelete: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    flat: Boolean = false,
+    showDivider: Boolean = false,
 ) {
     var expanded by remember(comment.id) { mutableStateOf(false) }
     // 正文真的被截断了才给「展开」；短评论不占这一行。
@@ -98,7 +109,7 @@ internal fun BiliCommentItem(
         { if (comment.mid > 0L) onOpenUser(comment.mid) }
     }
     val isDark = COUITheme.colorScheme.background.luminance() < 0.5f
-    val linkBlue = if (isDark) Color(0xFF5CA8FF) else Color(0xFF1367B1)
+    val linkBlue = if (flat) COUITheme.colorScheme.primary else if (isDark) Color(0xFF5CA8FF) else Color(0xFF1367B1)
     // 楼中楼：白卡片上压一块中性浅灰，和列表底色拉开层次（取微博的配色）。
     val subBoxBg = if (isDark) Color(0xFF2B2D31) else Color(0xFFF2F3F5)
     // 灰块和白卡的亮度差只有 12 级，补一根极淡的描边，免得看着像没渲染出来。
@@ -109,18 +120,32 @@ internal fun BiliCommentItem(
     }
     val metaColor = if (isDark) Color(0xFF848994) else Color(0xFF9499A0)
     val canManageOwn = currentMid > 0L && comment.mid == currentMid && comment.id > 0L && onDelete != null
+    val replyCount = maxOf(comment.replyCount, comment.replies.size)
+    val replyCenter = if (flat && !isSubReply && onOpenReplies != null && replyCount > 0) {
+        remember(comment.id) { mutableFloatStateOf(0f) }
+    } else {
+        null
+    }
     val pressAnchor = rememberPreciseClickState()
     var longPressMenuExpanded by remember(comment.id) { mutableStateOf(false) }
     var confirmDelete by remember(comment.id) { mutableStateOf(false) }
     val menuItems = rememberCommentMenuItems(
         comment = comment,
-        enabled = canManageOwn,
+        enabled = flat || canManageOwn,
+        canDelete = canManageOwn,
         onRequestDelete = { confirmDelete = true },
     )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (replyCenter != null) {
+                    Modifier.replyThreadLine(avatarDp, COUITheme.colorScheme.dividerLine) { replyCenter.floatValue }
+                } else {
+                    Modifier
+                },
+            )
             .then(if (canManageOwn) Modifier.preciseClickAnchor(pressAnchor) else Modifier)
             .then(
                 if (onClick != null || canManageOwn) {
@@ -143,7 +168,7 @@ internal fun BiliCommentItem(
                 .clip(CircleShape)
                 .clickable(onClick = openUser),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(CommentAvatarGap))
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -157,12 +182,12 @@ internal fun BiliCommentItem(
                         nameColor = nameColor,
                         onClick = openUser,
                     )
-                    val metaText = remember(comment.timeSec, comment.location) {
+                    val metaText = remember(comment.timeSec, comment.location, flat) {
                         val datePart = Formatters.formatCommentDate(comment.timeSec)
+                        val location = if (flat) comment.location.replaceFirst(LocationPrefix, "").trim() else comment.location
                         when {
-                            datePart.isNotEmpty() && comment.location.isNotEmpty() ->
-                                "$datePart · ${comment.location}"
-                            comment.location.isNotEmpty() -> comment.location
+                            datePart.isNotEmpty() && location.isNotEmpty() -> "$datePart · $location"
+                            location.isNotEmpty() -> location
                             else -> datePart
                         }
                     }
@@ -179,14 +204,18 @@ internal fun BiliCommentItem(
                     }
                 }
 
-                comment.sailing?.let { sailing ->
-                    Spacer(Modifier.width(8.dp))
-                    CommentSailingBadge(sailing = sailing, isDark = isDark)
+                if (!flat) {
+                    comment.sailing?.let { sailing ->
+                        Spacer(Modifier.width(8.dp))
+                        CommentSailingBadge(sailing = sailing, isDark = isDark)
+                    }
                 }
-                if (canManageOwn) {
+                if (menuItems.isNotEmpty()) {
                     CommentMoreButton(
                         menuItems = menuItems,
-                        modifier = Modifier.padding(start = 4.dp),
+                        modifier = Modifier.padding(start = 4.dp)
+                            .then(if (flat) Modifier.align(Alignment.Top) else Modifier),
+                        horizontal = flat,
                     )
                 }
             }
@@ -249,9 +278,30 @@ internal fun BiliCommentItem(
                 onReply = onReply,
                 onDislike = onDislike,
                 onLike = onLike,
+                flat = flat,
             )
 
-            if (!isSubReply && onOpenReplies != null &&
+            if (replyCenter != null) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .onPlaced { replyCenter.floatValue = it.positionInParent().y + it.size.height / 2f }
+                        .clip(SquircleShape(6.dp))
+                        .clickable { onOpenReplies?.invoke(comment) }
+                        .padding(top = 6.dp, bottom = 6.dp, end = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "$replyCount 条回复",
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = linkBlue,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(COUIIcons.ChevronForward, null, Modifier.size(14.dp), tint = linkBlue)
+                }
+            } else if (!flat && !isSubReply && onOpenReplies != null &&
                 (comment.replies.isNotEmpty() || comment.replyCount > 0)
             ) {
                 val previewReplies = remember(comment.replies) { comment.replies.take(2) }
@@ -307,6 +357,9 @@ internal fun BiliCommentItem(
                     }
                 }
             }
+            if (showDivider) {
+                HorizontalDivider(Modifier.padding(top = 10.dp), color = COUITheme.colorScheme.dividerLine)
+            }
         }
     }
 
@@ -329,6 +382,39 @@ internal fun BiliCommentItem(
             },
         )
     }
+}
+
+private fun Modifier.replyThreadLine(
+    avatarSize: Dp,
+    color: Color,
+    replyCenter: () -> Float,
+): Modifier = drawWithCache {
+    val fromY = (avatarSize + 5.dp).toPx()
+    val toY = replyCenter()
+    // The reply row is measured inside the text column, whose top aligns with the avatar.
+    val path = Path().apply {
+        if (toY > fromY) {
+            val avatarX = avatarSize.toPx() / 2f
+            val tailX = (avatarSize + CommentAvatarGap - 10.dp).toPx()
+            val fromX = if (layoutDirection == LayoutDirection.Ltr) avatarX else size.width - avatarX
+            val toX = if (layoutDirection == LayoutDirection.Ltr) tailX else size.width - tailX
+            val direction = if (layoutDirection == LayoutDirection.Ltr) 1f else -1f
+            val bend = minOf(12.dp.toPx(), tailX - avatarX, toY - fromY)
+            moveTo(fromX, fromY)
+            lineTo(fromX, toY - bend)
+            cubicTo(
+                x1 = fromX,
+                y1 = toY - bend * 0.45f,
+                x2 = fromX + direction * bend * 0.45f,
+                y2 = toY,
+                x3 = fromX + direction * bend,
+                y3 = toY,
+            )
+            lineTo(toX, toY)
+        }
+    }
+    val stroke = Stroke(width = 1.dp.toPx())
+    onDrawBehind { drawPath(path, color = color, style = stroke) }
 }
 
 @Composable
@@ -475,80 +561,88 @@ private fun CommentActionBar(
     onReply: () -> Unit,
     onDislike: () -> Unit,
     onLike: () -> Unit,
+    flat: Boolean,
 ) {
     val activeColor = COUITheme.colorScheme.primary
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val idleColor = if (flat) COUITheme.colorScheme.onSurface else metaColor
+    val likeIcon = if (liked) LikeFilledIcon else LikeOutlineIcon
+    val likeLabel = if (liked) "取消点赞" else "点赞"
+    val likeColor = if (liked) activeColor else idleColor
+    val dislikeIcon = if (disliked) DislikeFilledIcon else DislikeOutlineIcon
+    val dislikeLabel = if (disliked) "取消点踩" else "点踩"
+    val dislikeColor = if (disliked) activeColor else idleColor
+    val formattedCount = if (likeCount > 0) Formatters.formatStat(likeCount.toLong()) else null
+
+    if (flat) {
         Row(
-            modifier = Modifier
-                .clip(SquircleShape(6.dp))
-                .clickable(onClick = onReply)
-                .padding(vertical = 2.dp, horizontal = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = ReplyCurveIcon,
-                contentDescription = "回复",
-                modifier = Modifier.size(15.dp),
-                tint = metaColor,
-            )
-            Spacer(Modifier.width(5.dp))
+            CommentIconAction(likeIcon, likeLabel, likeColor, onLike, formattedCount, liked, flat = true)
+            CommentIconAction(dislikeIcon, dislikeLabel, dislikeColor, onDislike, flat = true)
+            CommentIconAction(COUIIcons.Messages, "回复", idleColor, onReply, flat = true)
+        }
+    } else {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .clip(SquircleShape(6.dp))
+                    .clickable(onClick = onReply)
+                    .padding(vertical = 2.dp, horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = ReplyCurveIcon,
+                    contentDescription = "回复",
+                    modifier = Modifier.size(15.dp),
+                    tint = metaColor,
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = "回复",
+                    style = COUITheme.textStyles.footnote1.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+                    color = metaColor,
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
+            CommentIconAction(dislikeIcon, dislikeLabel, dislikeColor, onDislike, horizontalPadding = 6.dp)
+            Spacer(Modifier.width(14.dp))
+            CommentIconAction(likeIcon, likeLabel, likeColor, onLike, formattedCount, liked)
+        }
+    }
+}
+
+@Composable
+private fun CommentIconAction(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit,
+    count: String? = null,
+    emphasizedCount: Boolean = false,
+    horizontalPadding: Dp = 4.dp,
+    flat: Boolean = false,
+) {
+    Row(
+        modifier = Modifier
+            .clip(SquircleShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = horizontalPadding, vertical = if (flat) 6.dp else 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, label, Modifier.size(if (flat) 18.dp else 16.dp), tint = color)
+        if (count != null) {
+            Spacer(Modifier.width(4.dp))
             Text(
-                text = "回复",
+                text = count,
                 style = COUITheme.textStyles.footnote1.copy(
                     fontSize = 12.5.sp,
                     lineHeight = 16.sp,
+                    fontWeight = if (emphasizedCount) FontWeight.Medium else FontWeight.Normal,
                 ),
-                color = metaColor,
+                color = color,
             )
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        Box(
-            modifier = Modifier
-                .clip(SquircleShape(6.dp))
-                .clickable(onClick = onDislike)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = if (disliked) DislikeFilledIcon else DislikeOutlineIcon,
-                contentDescription = if (disliked) "取消点踩" else "点踩",
-                modifier = Modifier.size(16.dp),
-                tint = if (disliked) activeColor else metaColor,
-            )
-        }
-
-        Spacer(Modifier.width(14.dp))
-
-        Row(
-            modifier = Modifier
-                .clip(SquircleShape(6.dp))
-                .clickable(onClick = onLike)
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = if (liked) LikeFilledIcon else LikeOutlineIcon,
-                contentDescription = if (liked) "已赞" else "点赞",
-                modifier = Modifier.size(16.dp),
-                tint = if (liked) activeColor else metaColor,
-            )
-            if (likeCount > 0) {
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = Formatters.formatStat(likeCount.toLong()),
-                    style = COUITheme.textStyles.footnote1.copy(
-                        fontSize = 12.5.sp,
-                        lineHeight = 16.sp,
-                        fontWeight = if (liked) FontWeight.Medium else FontWeight.Normal,
-                    ),
-                    color = if (liked) activeColor else metaColor,
-                )
-            }
         }
     }
 }
