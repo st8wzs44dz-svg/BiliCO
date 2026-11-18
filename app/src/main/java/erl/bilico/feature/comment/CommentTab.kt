@@ -73,6 +73,17 @@ private sealed interface ComposeTarget {
 }
 
 @Composable
+internal fun rememberCommentViewModel(
+    container: AppContainer,
+    oid: Long,
+    type: Int = 1,
+    targetRootId: Long = 0L,
+    targetReplyId: Long = 0L,
+): CommentViewModel = viewModel(key = "comment-$type-$oid-$targetRootId-$targetReplyId") {
+    CommentViewModel(container.comments, oid, type, targetRootId, targetReplyId)
+}
+
+@Composable
 fun CommentTab(
     container: AppContainer,
     oid: Long,
@@ -85,10 +96,11 @@ fun CommentTab(
     targetRootId: Long = 0L,
     targetReplyId: Long = 0L,
     replyThreadController: ReplyThreadController? = null,
+    toolbarViewModel: CommentViewModel? = null,
+    sortInToolbar: Boolean = false,
 ) {
-    val viewModel: CommentViewModel = viewModel(key = "comment-$type-$oid-$targetRootId-$targetReplyId") {
-        CommentViewModel(container.comments, oid, type, targetRootId, targetReplyId)
-    }
+    val viewModel = toolbarViewModel ?: rememberCommentViewModel(container, oid, type, targetRootId, targetReplyId)
+    val headerItems = if (sortInToolbar) 0 else 1
     val state by viewModel.state.collectAsStateWithLifecycle()
     val account by container.session.account.collectAsStateWithLifecycle()
     val currentMid = account?.mid ?: container.session.mid()
@@ -108,12 +120,12 @@ fun CommentTab(
         threadController.itemsSnapshot = state.items
     }
 
-    LaunchedEffect(state.focusRootId, state.items.size) {
+    LaunchedEffect(state.focusRootId, state.items.size, headerItems) {
         val focusId = state.focusRootId
         if (focusId > 0L && state.items.isNotEmpty()) {
             val idx = state.items.indexOfFirst { it.id == focusId }
             if (idx >= 0) {
-                listState.animateScrollToItem(idx + 1)
+                listState.animateScrollToItem(idx + headerItems)
             }
             viewModel.consumeFocusTarget()
         }
@@ -125,12 +137,12 @@ fun CommentTab(
         viewModel.consumeReplyDialog()
     }
 
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, viewModel, headerItems) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .distinctUntilChanged()
             .collect { lastVisible ->
                 val size = viewModel.state.value.items.size
-                if (lastVisible != null && size > 0 && lastVisible >= size - 2) {
+                if (lastVisible != null && size > 0 && lastVisible >= size + headerItems - 3) {
                     viewModel.loadMore()
                 }
             }
@@ -178,12 +190,12 @@ fun CommentTab(
                     modifier = Modifier.fillMaxSize().scrollEndHaptic(),
                     contentPadding = PaddingValues(
                         start = if (flat) 20.dp else 16.dp,
-                        top = 12.dp + topInset,
+                        top = topInset + if (sortInToolbar) 8.dp else 12.dp,
                         end = if (flat) 20.dp else 16.dp,
                         bottom = 88.dp + bottomInset,
                     ),
                 ) {
-                    item(key = "header") {
+                    if (!sortInToolbar) item(key = "header") {
                         if (flat) {
                             VideoCommentSortChips(state.sort, viewModel::selectSort)
                         } else Row(
@@ -241,7 +253,7 @@ fun CommentTab(
                             )
                         }
                         if (flat) {
-                            Box(Modifier.fillMaxWidth().padding(top = 12.dp)) { commentRow() }
+                            Box(Modifier.fillMaxWidth().padding(top = if (sortInToolbar) 8.dp else 12.dp)) { commentRow() }
                         } else {
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),

@@ -1,10 +1,10 @@
 package erl.bilico.feature.video
 
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -13,35 +13,53 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import erl.bilico.data.model.CommentSort
 import erl.bilico.data.util.Formatters
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.components.CompactSendButton
 import erl.bilico.ui.components.DanmakuToggle
 import erl.bilico.ui.components.inputCapsuleGlass
 import erl.bilico.ui.pageContainerColor
+import io.github.suqi8.coui.kmp.anim.COUIMoveEase
 import io.github.suqi8.coui.kmp.basic.ChipTab
+import io.github.suqi8.coui.kmp.basic.ChipTabDefaults
+import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.InputField
 import io.github.suqi8.coui.kmp.basic.SearchBar
 import io.github.suqi8.coui.kmp.basic.SearchBarDefaults
@@ -68,6 +86,8 @@ internal fun VideoDetailBar(
     selected: Int,
     onSelect: (Int) -> Unit,
     commentCount: Long,
+    commentSort: CommentSort?,
+    onToggleCommentSort: () -> Unit,
     danmakuEnabled: Boolean,
     onToggleDanmaku: () -> Unit,
     onOpenDanmakuSettings: (() -> Unit)? = null,
@@ -97,15 +117,22 @@ internal fun VideoDetailBar(
     val minCapsulePx = with(density) { MIN_DANMAKU_CAPSULE_WIDTH.roundToPx() }
     val baseGapPx = with(density) { DETAIL_BAR_GAP.roundToPx() }
 
+    val sortVisible = selected == 1 && commentSort != null
+    val sortReveal = animateFloatAsState(
+        targetValue = if (sortVisible) 1f else 0f,
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
+        label = "commentSortReveal",
+    )
+
     // 标签收起的进度：宽度跟着收窄，同时整块淡出，收完后不留一条硬边。
     val collapse by animateFloatAsState(
         targetValue = if (composing) 1f else 0f,
-        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = MoveEase),
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
     )
     // 右端补偿跟着「发送」的展开走同一段节奏，整段动画里行尾都咬住不动。
     val actionSlack by animateDpAsState(
         targetValue = if (composing) ACTION_END_SLACK else 0.dp,
-        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = MoveEase),
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
     )
     Layout(
         modifier = modifier
@@ -126,14 +153,17 @@ internal fun VideoDetailBar(
                         translationX = -size.width * collapse
                     },
                 ) {
-                    tabs.forEachIndexed { index, title ->
-                        ChipTab(
-                            label = title,
-                            selected = selected == index,
-                            onClick = { onSelect(index) },
-                            backdrop = barBackdrop,
-                        )
-                    }
+                    ChipTab(tabs[0], selected == 0, onClick = { onSelect(0) }, backdrop = barBackdrop)
+                    VideoCommentChip(
+                        label = tabs[1],
+                        selected = selected == 1,
+                        sort = commentSort ?: CommentSort.Hot,
+                        sortEnabled = sortVisible && !composing,
+                        reveal = sortReveal,
+                        onSelect = { onSelect(1) },
+                        onToggleSort = onToggleCommentSort,
+                        backdrop = barBackdrop,
+                    )
                 }
             }
 
@@ -250,6 +280,110 @@ internal fun VideoDetailBar(
     }
 }
 
+/** One COUI surface with separate tab and sort hit targets. */
+@Composable
+private fun VideoCommentChip(
+    label: String,
+    selected: Boolean,
+    sort: CommentSort,
+    sortEnabled: Boolean,
+    reveal: State<Float>,
+    onSelect: () -> Unit,
+    onToggleSort: () -> Unit,
+    backdrop: Backdrop?,
+) {
+    val scheme = COUITheme.colorScheme
+    val isHot = sort == CommentSort.Hot
+    val sortInteractive by remember(reveal) { derivedStateOf { reveal.value >= 0.9f } }
+    Box {
+        ChipTab(
+            label = "",
+            selected = selected,
+            onClick = onSelect,
+            modifier = Modifier.matchParentSize().semantics { contentDescription = label },
+            backdrop = backdrop,
+        )
+        Layout(
+            modifier = Modifier.height(ChipTabDefaults.Height),
+            content = {
+                Text(
+                    text = label,
+                    modifier = Modifier.clearAndSetSemantics {},
+                    style = ChipTabDefaults.textStyle(),
+                    color = scheme.onSurface,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    modifier = Modifier
+                        .graphicsLayer { alpha = ((reveal.value - 0.65f) / 0.35f).coerceIn(0f, 1f) }
+                        .clip(CircleShape)
+                        .background(scheme.primary.copy(alpha = 0.12f))
+                        .clickable(enabled = sortEnabled && sortInteractive, role = Role.Button, onClick = onToggleSort)
+                        .semantics {
+                            contentDescription = if (isHot) "当前最热，切换到最新" else "当前最新，切换到最热"
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isHot) HotCommentSortIcon else LatestCommentSortIcon,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = scheme.primary,
+                    )
+                }
+            },
+        ) { measurables, constraints ->
+            val progress = reveal.value.coerceIn(0f, 1f)
+            val horizontalPadding = ChipTabDefaults.StartPadding.roundToPx()
+            val start = horizontalPadding.coerceAtMost(constraints.maxWidth / 2)
+            val desiredSlot = (30.dp.toPx() * progress).roundToInt()
+            val end = (ChipTabDefaults.EndPadding.roundToPx() - (desiredSlot * 8f / 30f).roundToInt())
+                .coerceIn(0, constraints.maxWidth - start)
+            val available = constraints.maxWidth - start - end
+            val slot = desiredSlot.coerceIn(0, available)
+            val labelPlaceable = measurables[0].measure(Constraints(maxWidth = available - slot, maxHeight = constraints.maxHeight))
+            val iconHeight = minOf(28.dp.roundToPx(), constraints.maxHeight)
+            val icon = if (slot > 0) measurables[1].measure(Constraints.fixed(slot, iconHeight)) else null
+            val width = start + labelPlaceable.width + slot + end
+            val height = constraints.maxHeight
+            layout(width, height) {
+                labelPlaceable.placeRelative(start, (height - labelPlaceable.height) / 2)
+                icon?.placeRelative(start + labelPlaceable.width, (height - iconHeight) / 2)
+            }
+        }
+    }
+}
+
+private val HotCommentSortIcon by lazy {
+    commentSortIcon(
+        "HotCommentSort",
+        "M12 2.8C12.4 7 9.1 7.7 9.1 11.2C7.6 10.7 6.9 9.4 7 8C5.3 9.8 4.5 11.6 4.5 14.3" +
+            "C4.5 18.7 7.8 21.5 12 21.5C16.2 21.5 19.5 18.6 19.5 14.3C19.5 10.6 16.7 6.3 12 2.8Z" +
+            "M12 13.2C11.7 15.5 9.2 15.5 9.2 18.1C9.2 19.6 10.4 21.3 12 21.3C13.6 21.3 14.8 19.9 14.8 18.3" +
+            "C14.8 16.4 13.2 14.6 12 13.2Z",
+    )
+}
+
+private val LatestCommentSortIcon by lazy {
+    commentSortIcon(
+        "LatestCommentSort",
+        "M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12ZM12 6.8V12H16.2",
+    )
+}
+
+private fun commentSortIcon(name: String, data: String): ImageVector =
+    ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)
+        .addPath(
+            pathData = addPathNodes(data),
+            stroke = SolidColor(Color.Black),
+            strokeLineWidth = 1.8f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        )
+        .build()
+
 private val DETAIL_TABS = listOf("简介", "评论")
 private val DETAIL_BAR_GAP = 6.dp
 private val MIN_DANMAKU_CAPSULE_WIDTH = 124.dp
@@ -295,9 +429,6 @@ private val ACTION_END_SLACK = 16.dp
 
 /** COUI 搜索栏背景变形的时长，让标签收起与胶囊铺开同一条节奏。 */
 private const val DETAIL_RESIZE_MILLIS = 450
-
-/** COUI 的 `COUIMoveEaseInterpolator`：cubic-bezier(0.3, 0, 0.1, 1)。 */
-private val MoveEase = CubicBezierEasing(0.3f, 0f, 0.1f, 1f)
 
 /**
  * 专为播放页「简介 / 评论」标签栏打造的超平滑毛玻璃材质容器：

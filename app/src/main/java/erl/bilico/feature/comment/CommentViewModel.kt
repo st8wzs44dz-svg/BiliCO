@@ -8,6 +8,7 @@ import erl.bilico.data.model.UploadedPicture
 import erl.bilico.data.repository.CommentRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +43,7 @@ class CommentViewModel(
 
     private var cursor: String? = null
     private var newestPage = 0
+    private var loadJob: Job? = null
     private var messageJob: Job? = null
     private var targetHandled = false
 
@@ -50,20 +52,20 @@ class CommentViewModel(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _state.update { it.copy(isLoading = true, error = null) }
-            cursor = null
-            newestPage = 0
-            val sort = _state.value.sort
-            repository.mainComments(oid, null, type, sort)
+        loadJob?.cancel()
+        _state.update { it.copy(isLoading = true, isLoadingMore = false, error = null) }
+        cursor = null
+        newestPage = 0
+        val sort = _state.value.sort
+        loadJob = viewModelScope.launch {
+            val result = repository.mainComments(oid, null, type, sort)
+            ensureActive()
+            result
                 .onSuccess { page ->
-                    cursor = page.nextOffset
-                    if (sort == CommentSort.New) newestPage = 1
                     var mergedItems = page.comments
                     var focusRootId = 0L
                     var pendingReplyDialog: Pair<Comment, Long>? = null
                     if (!targetHandled && (targetRootId > 0L || targetReplyId > 0L) && sort == CommentSort.Hot) {
-                        targetHandled = true
                         val lookupRootId = if (targetRootId > 0L) targetRootId else targetReplyId
                         val existing = page.comments.firstOrNull { it.id == lookupRootId }
                         val resolvedRoot = existing
@@ -73,6 +75,8 @@ class CommentViewModel(
                             } else {
                                 null
                             }
+                        ensureActive()
+                        targetHandled = true
                         if (resolvedRoot != null) {
                             mergedItems = listOf(resolvedRoot) + page.comments.filterNot { it.id == resolvedRoot.id }
                             focusRootId = resolvedRoot.id
@@ -81,6 +85,8 @@ class CommentViewModel(
                             }
                         }
                     }
+                    cursor = page.nextOffset
+                    if (sort == CommentSort.New) newestPage = 1
                     _state.update {
                         it.copy(
                             items = mergedItems,
@@ -120,7 +126,11 @@ class CommentViewModel(
                 items = emptyList(),
                 total = 0,
                 isEnd = false,
+                isLoading = true,
                 isLoadingMore = false,
+                error = null,
+                focusRootId = 0L,
+                pendingReplyDialog = null,
             )
         }
         refresh()
@@ -135,8 +145,10 @@ class CommentViewModel(
         }
         val offset = cursor ?: return
         _state.update { it.copy(isLoadingMore = true, error = null) }
-        viewModelScope.launch {
-            repository.mainComments(oid, offset, type, current.sort)
+        loadJob = viewModelScope.launch {
+            val result = repository.mainComments(oid, offset, type, current.sort)
+            ensureActive()
+            result
                 .onSuccess { page ->
                     cursor = page.nextOffset
                     _state.update { state ->
@@ -165,8 +177,10 @@ class CommentViewModel(
     private fun loadNewestMore() {
         val nextPage = newestPage + 1
         _state.update { it.copy(isLoadingMore = true, error = null) }
-        viewModelScope.launch {
-            repository.newestPage(oid, nextPage, type)
+        loadJob = viewModelScope.launch {
+            val result = repository.newestPage(oid, nextPage, type)
+            ensureActive()
+            result
                 .onSuccess { page ->
                     newestPage = nextPage
                     _state.update { state ->

@@ -11,18 +11,25 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import erl.bilico.data.model.VideoChapter
 import erl.bilico.data.model.VideoEpisode
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.comment.CommentTab
 import erl.bilico.feature.comment.ReplyDetailOverlay
 import erl.bilico.feature.comment.ReplyThreadController
+import erl.bilico.feature.comment.rememberCommentViewModel
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.NavState
 import erl.bilico.ui.PinnedBarDensity
@@ -38,6 +45,10 @@ import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Playlist
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
+private val CommentTopGap = 8.dp
 
 /**
  * 竖屏播放页下半部分的「简介 / 评论」横向切换区域及顶部悬浮毛玻璃切换栏。
@@ -91,9 +102,26 @@ internal fun VideoDetailSection(
     val pageBg = pageContainerColor()
     val statusBarDp = with(LocalDensity.current) { rememberStableStatusBarHeightPx().toDp() }
     val firstRowHeight = statusBarDp + CollapsedBarHeight
+    val toolbarBottom = firstRowHeight + DETAIL_BAR_HEIGHT
+    val aid = state.detail?.aid ?: 0L
+    val commentsSelected = detailPager.currentPage == 1
+    var commentsVisited by remember(aid) { mutableStateOf(false) }
+    LaunchedEffect(aid, commentsSelected) {
+        if (aid > 0 && commentsSelected) commentsVisited = true
+    }
+    val commentViewModel = if (aid > 0 && (commentsSelected || commentsVisited)) {
+        rememberCommentViewModel(container, aid, targetRootId = commentRootId, targetReplyId = commentTargetId)
+    } else {
+        null
+    }
+    // Only changes in the selected sort invalidate the toolbar, not list pagination or votes.
+    val commentSort = commentViewModel?.let { model ->
+        remember(model) { model.state.map { it.sort }.distinctUntilChanged() }
+            .collectAsStateWithLifecycle(initialValue = model.state.value.sort).value
+    }
     // 列表整块铺到最上面（一直到折叠态状态栏），滚动时正文从两行栏底下穿过去；
     // 静止时靠列表顶部内边距让出折叠栏 + 弹幕切换栏，第一行不会被压住。
-    val contentTop = firstRowHeight + DETAIL_BAR_HEIGHT + 12.dp
+    val contentTop = toolbarBottom + 12.dp
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -182,7 +210,6 @@ internal fun VideoDetailSection(
                 }
 
                 else -> {
-                    val aid = state.detail?.aid ?: 0L
                     if (aid > 0L) {
                         CompositionLocalProvider(
                             LocalCommentSeek provides onSeekCommentMs,
@@ -192,11 +219,13 @@ internal fun VideoDetailSection(
                                 oid = aid,
                                 onOpenUser = onOpenUser,
                                 listState = commentListState,
-                                topInset = contentTop,
+                                topInset = toolbarBottom + CommentTopGap,
                                 bottomInset = navBarBottom,
                                 targetRootId = commentRootId,
                                 targetReplyId = commentTargetId,
                                 replyThreadController = replyThread,
+                                toolbarViewModel = commentViewModel,
+                                sortInToolbar = true,
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -213,11 +242,17 @@ internal fun VideoDetailSection(
             backdrop = if (BlurEffectsEnabled && blurActive) detailLayerBackdrop else null,
             materialBackdrop = if (BlurEffectsEnabled && blurActive) barMaterialBackdrop else null,
             topInset = firstRowHeight,
+            extraHeight = if (commentsSelected) CommentTopGap else 6.dp,
         ) {
             VideoDetailBar(
                 selected = detailPager.currentPage,
                 onSelect = onSelectPage,
                 commentCount = state.detail?.reply ?: 0L,
+                commentSort = commentSort,
+                onToggleCommentSort = {
+                    commentViewModel?.toggleSort()
+                    commentListState.requestScrollToItem(0)
+                },
                 danmakuEnabled = danmakuEnabled,
                 onToggleDanmaku = { container.settings.setDanmakuEnabled(!danmakuEnabled) },
                 onOpenDanmakuSettings = onOpenDanmakuSettings,
@@ -230,7 +265,6 @@ internal fun VideoDetailSection(
             )
         }
 
-        val aid = state.detail?.aid ?: 0L
         if (aid > 0L) {
             CompositionLocalProvider(
                 LocalCommentSeek provides onSeekCommentMs,
