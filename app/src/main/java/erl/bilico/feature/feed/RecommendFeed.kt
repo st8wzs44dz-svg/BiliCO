@@ -23,8 +23,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Scale
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
@@ -64,15 +67,20 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.fullPagePullToRefreshColors
 import io.github.suqi8.coui.kmp.basic.rememberFullPagePullToRefreshState
 import io.github.suqi8.coui.kmp.theme.COUITheme
-import kotlinx.coroutines.flow.distinctUntilChanged
 import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** 列表末尾还剩这么多项时就开始拉下一页（两列，提前约三行）。 */
 private const val FeedPrefetchDistance = 6
 
-/** 每次列表变化时，把末尾这么多张封面提前解码进内存缓存。 */
-private const val CoverPrefetchCount = 16
+/** 只预取视口前方两行，限制后台请求与当前可见图片的竞争。 */
+private const val CoverPrefetchRows = 2
+private const val CoverPrefetchParallelism = 2
+private const val FeedCardContentType = "feed-card"
 
 /** 刷新拼接线的固定 key，重排时不会和视频卡片抢位置。 */
 private const val RefreshDividerKey = "feed-refresh-divider"
@@ -80,9 +88,6 @@ private const val RefreshDividerKey = "feed-refresh-divider"
 /** 刷新换批时旧列表淡出、新列表淡入的时长。 */
 private const val SwapFadeOutMillis = 90
 private const val SwapFadeInMillis = 150
-
-/** 首屏大约能看到的卡片数，淡出的同时先把这些封面拉起来。 */
-private const val SwapCoverCount = 8
 
 /** 列表当前真正画出来的那一批；刷新结果要等淡出完才换进来。 */
 private data class ShownFeed(
@@ -115,22 +120,6 @@ internal fun RecommendFeed(
     }
     val coverHeightPx = coverWidthPx * 9 / 16
 
-    // 列表末尾的封面提前解码进内存缓存：滑到那儿时图已经在，不会当着面加载。
-    val context = LocalContext.current
-    LaunchedEffect(state.items.size, coverWidthPx) {
-        val tail = state.items.takeLast(CoverPrefetchCount)
-        if (tail.isEmpty()) return@LaunchedEffect
-        val loader = SingletonImageLoader.get(context)
-        tail.forEach { video ->
-            loader.enqueue(
-                ImageRequest.Builder(context)
-                    .data(Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx))
-                    .size(coverWidthPx, coverHeightPx)
-                    .build(),
-            )
-        }
-    }
-
     // 刷新结果不直接换上：旧列表原地淡出，看不见时换成新批次并回到第一条，再淡入。
     // 这样不会先在顶上冒出拼接占位、再从中间闪回顶部。
     var shown by remember {
@@ -144,19 +133,72 @@ internal fun RecommendFeed(
             listAlpha.snapTo(1f)
             return@LaunchedEffect
         }
-        val loader = SingletonImageLoader.get(context)
-        next.items.take(SwapCoverCount).forEach { video ->
-            loader.enqueue(
-                ImageRequest.Builder(context)
-                    .data(Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx))
-                    .size(coverWidthPx, coverHeightPx)
-                    .build(),
-            )
-        }
         listAlpha.animateTo(0f, tween(SwapFadeOutMillis))
         shown = next
         listState.scrollToItem(0)
         listAlpha.animateTo(1f, tween(SwapFadeInMillis))
+    }
+
+    val context = LocalContext.current
+    val incomingItems = rememberUpdatedState(
+        state.items.takeIf { shown.items.isNotEmpty() && state.refreshSerial != shown.serial },
+    )
+    LaunchedEffect(active, listState, context, coverWidthPx, coverHeightPx) {
+        if (!active || coverWidthPx <= 0 || coverHeightPx <= 0) return@LaunchedEffect
+        val loader = SingletonImageLoader.get(context)
+        val permits = Semaphore(CoverPrefetchParallelism)
+        val requests = mutableMapOf<String, Job>()
+        val count = CoverPrefetchRows * FeedColumns
+        snapshotFlow {
+            val incoming = incomingItems.value
+            if (incoming != null) {
+                // 旧列表淡出期间优先准备新首屏，换完后继续按视口预取。
+                incoming to (0 until minOf(count, incoming.size))
+            } else {
+                val feed = shown
+                val visible = listState.layoutInfo.visibleItemsInfo
+                val backward = listState.lastScrolledBackward
+                val anchor = if (backward) {
+                    visible.firstOrNull { it.contentType == FeedCardContentType }
+                } else {
+                    visible.lastOrNull { it.contentType == FeedCardContentType }
+                }
+                val index = anchor?.index ?: return@snapshotFlow feed.items to IntRange.EMPTY
+                val hasDivider = feed.inserted in 1 until feed.items.size
+                val cardIndex = if (hasDivider && index > feed.inserted) index - 1 else index
+                val range = if (backward) {
+                    minOf(cardIndex, feed.items.size) - 1 downTo maxOf(0, cardIndex - count)
+                } else {
+                    cardIndex + 1 until minOf(feed.items.size, cardIndex + 1 + count)
+                }
+                feed.items to range
+            }
+        }.collect { (items, indices) ->
+            val urls = indices.mapTo(linkedSetOf()) { index ->
+                Formatters.sizedImageUrl(items[index].cover, coverWidthPx, coverHeightPx)
+            }
+            requests.entries.removeAll { (url, job) ->
+                if (url in urls) return@removeAll false
+                job.cancel()
+                true
+            }
+            urls.forEach { url ->
+                requests.getOrPut(url) {
+                    launch {
+                        permits.withPermit {
+                            loader.execute(
+                                ImageRequest.Builder(context)
+                                    .data(url)
+                                    .size(coverWidthPx, coverHeightPx)
+                                    .scale(Scale.FILL)
+                                    .precision(Precision.INEXACT)
+                                    .build(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 只有自己是当前页时才报折叠量：翻走时收起来，翻回来按列表实际位置重新报一次。
@@ -257,7 +299,7 @@ internal fun RecommendFeed(
             items(
                 items = freshItems,
                 key = { it.bvid },
-                contentType = { "feed-card" },
+                contentType = { FeedCardContentType },
             ) { card(it) }
             if (inserted in 1 until shown.items.size) {
                 item(key = RefreshDividerKey, span = { GridItemSpan(maxLineSpan) }) {
@@ -267,7 +309,7 @@ internal fun RecommendFeed(
             items(
                 items = olderItems,
                 key = { it.bvid },
-                contentType = { "feed-card" },
+                contentType = { FeedCardContentType },
             ) { card(it) }
             if (shown.items.isNotEmpty()) {
                 item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {

@@ -1,4 +1,4 @@
-name: Build BiliCO keep-screen-on APK
+name: Build BiliCO APK for signing
 
 on:
   push:
@@ -32,24 +32,14 @@ jobs:
         run: |
           ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository :coui-nav:publishAndroidPublicationToLocalRepository :coui-nav:publishKotlinMultiplatformPublicationToLocalRepository :coui-navigation3-ui:publishAndroidPublicationToLocalRepository :coui-navigation3-ui:publishKotlinMultiplatformPublicationToLocalRepository
           find build/repository/local -name "*.aar" | head -30
-      - name: Assemble debug APK
+      # Sign the assembled APK with the persistent BiliCO update key before distribution.
+      - name: Assemble unsigned debug APK
         working-directory: BiliCO
-        run: ./gradlew :app:assembleDebug --stacktrace
-      - name: Verify and stage the APK
-        working-directory: BiliCO
-        run: |
-          apk=app/build/outputs/apk/debug/app-debug.apk
-          mapfile -t signers < <(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner | sort -V)
-          signer="${signers[-1]}"
-          "$signer" verify --verbose --print-certs "$apk"
-          "$(dirname "$signer")/aapt" dump badging "$apk" | grep "^package:"
-          mkdir -p dist
-          cp "$apk" dist/BiliCO-0.2.11-pre-keep-screen-on-debug.apk
-          sha256sum dist/*.apk
-      - name: Upload the APK
+        run: ./gradlew :app:assembleDebug -PbilicoUnsignedDebug=true --stacktrace
+      - name: Upload the unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: BiliCO-keep-screen-on-APK
-          path: BiliCO/dist/*.apk
+          name: BiliCO-unsigned-APK
+          path: BiliCO/app/build/outputs/apk/debug/app-debug-unsigned.apk
           if-no-files-found: error
           retention-days: 7
