@@ -2,6 +2,7 @@ package erl.bilico.feature.feed
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,22 +26,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -61,7 +56,9 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Play
+import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlin.math.roundToInt
 
 private val FeedAvatarSize = 18.dp
 
@@ -78,9 +75,6 @@ internal fun FeedCard(
     val coverUrl = remember(video.cover, coverWidthPx, coverHeightPx) {
         Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx)
     }
-    val blurCoverUrl = remember(video.cover) {
-        Formatters.sizedImageUrl(video.cover, 96, 54)
-    }
     val context = LocalContext.current
     val density = LocalDensity.current
     val avatarUrl = remember(video.upFace, density) {
@@ -89,14 +83,15 @@ internal fun FeedCard(
         val thumbnailPx = ((pixels + 31) / 32) * 32
         Formatters.sizedImageUrl(video.upFace, thumbnailPx, thumbnailPx)
     }
-    val blurRadiusPx = remember(density) { with(density) { 20.dp.toPx() } }
     val scheme = COUITheme.colorScheme
     // 长按卡片在手指位置弹同一个三点菜单，不跳到播放页也不走卡片点击。
     val pressState = rememberPreciseClickState()
     var menuExpanded by remember { mutableStateOf(false) }
-    var blurLoaded by remember(blurCoverUrl) { mutableStateOf(false) }
-    var blurFailed by remember(blurCoverUrl) { mutableStateOf(false) }
-    val showDarkBlur = blurCoverUrl.isNotBlank() && blurLoaded && !blurFailed
+    var coverReady by remember(coverUrl) { mutableStateOf(false) }
+    var cardSize by remember { mutableStateOf(IntSize.Zero) }
+    var coverHeight by remember { mutableStateOf(0) }
+    val background = rememberFeedCoverBackground(video.cover, coverUrl, coverReady, cardSize, coverHeight)
+    val showDarkBlur = background != null
     val titleColor = if (showDarkBlur) Color.White else scheme.onSurface
     val secondaryTextColor = if (showDarkBlur) {
         Color.White.copy(alpha = 0.7f)
@@ -113,149 +108,104 @@ internal fun FeedCard(
             onClick = onOpen,
             onLongPress = { menuExpanded = true },
         ) {
-        // 封面顶到卡片上沿和两侧，圆角由卡片自己的轮廓裁出来，不再单独套内边距。
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f),
-        ) {
-            AsyncImage(
-                model = coverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (video.durationText.isNotBlank()) {
-                Text(
-                    text = video.durationText,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(6.dp)
-                        .clip(SquircleShape(4.dp))
-                        .background(Color(0xB3000000))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                    fontSize = 11.sp,
-                    color = Color.White,
-                )
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clipToBounds(),
-        ) {
-            if (blurCoverUrl.isNotBlank() && !blurFailed) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .graphicsLayer {
-                            compositingStrategy = CompositingStrategy.Offscreen
-                        }
-                        .drawWithContent {
-                            drawContent()
-                            val fadePx = 28.dp.toPx().coerceAtMost(size.height)
-                            val fadeStop = if (size.height > 0f) {
-                                (fadePx / size.height).coerceIn(0f, 1f)
-                            } else {
-                                0f
-                            }
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0f to Color.Transparent,
-                                    fadeStop to Color.White,
-                                    1f to Color.White,
-                                ),
-                                blendMode = BlendMode.DstIn,
-                            )
-                        },
-                ) {
+            Box(Modifier.fillMaxWidth().onSizeChanged { cardSize = it }) {
+                // Both halves share one image layer, so the fade starts on top of the actual cover.
+                Box(Modifier.matchParentSize()) {
                     AsyncImage(
-                        model = blurCoverUrl,
+                        model = coverUrl,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        onSuccess = {
-                            blurLoaded = true
-                            blurFailed = false
-                        },
-                        onError = {
-                            blurLoaded = false
-                            blurFailed = true
-                        },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleY = -1f
-                                renderEffect = BlurEffect(
-                                    radiusX = blurRadiusPx,
-                                    radiusY = blurRadiusPx,
-                                    edgeTreatment = TileMode.Mirror,
+                        onSuccess = { coverReady = true },
+                        onError = { coverReady = false },
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                    )
+                    if (background != null) {
+                        Canvas(Modifier.matchParentSize()) {
+                            val top = (coverHeight - FeedCoverOverlap.roundToPx()).coerceAtLeast(0)
+                            val height = size.height.roundToInt() - top
+                            if (height > 0) {
+                                drawImage(
+                                    image = background,
+                                    dstOffset = IntOffset(0, top),
+                                    dstSize = IntSize(size.width.roundToInt(), height),
+                                    filterQuality = FilterQuality.Low,
                                 )
-                            },
-                    )
-                }
-                if (blurLoaded) {
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    0f to Color.Black.copy(alpha = 0f),
-                                    1f to Color.Black.copy(alpha = 0.22f),
-                                ),
-                            ),
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 6.dp),
-            ) {
-                Text(
-                    text = video.title,
-                    fontSize = 14.sp,
-                    lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = titleColor,
-                    minLines = 2,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(avatarUrl, FeedAvatarSize)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = video.upName.ifBlank { "未知 UP" },
-                        fontSize = 12.sp,
-                        color = secondaryTextColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Spacer(Modifier.height(4.dp))
-
-                // 三点菜单落在右下角、和播放量同一行，跟左侧头像差不多高。
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatLabel(COUIIcons.Play, video.playCountText, color = secondaryTextColor)
-                    if (video.danmakuText.isNotBlank()) {
-                        Spacer(Modifier.width(10.dp))
-                        StatLabel(COUIIcons.Messages, video.danmakuText, color = secondaryTextColor)
+                            }
+                        }
                     }
-                    Spacer(Modifier.weight(1f))
-                    MoreMenu(
-                        tint = secondaryTextColor,
-                        onWatchLater = onWatchLater,
-                        onShare = { shareVideo(context, video) },
-                    )
+                }
+
+                Column {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .onSizeChanged { coverHeight = it.height },
+                    ) {
+                        if (video.durationText.isNotBlank()) {
+                            Text(
+                                text = video.durationText,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(6.dp)
+                                    .clip(SquircleShape(4.dp))
+                                    .background(Color(0xB3000000))
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                                fontSize = 11.sp,
+                                color = Color.White,
+                            )
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 6.dp),
+                    ) {
+                        Text(
+                            text = video.title,
+                            fontSize = 14.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = titleColor,
+                            minLines = 2,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Avatar(avatarUrl, FeedAvatarSize)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = video.upName.ifBlank { "未知 UP" },
+                                fontSize = 12.sp,
+                                color = secondaryTextColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // 三点菜单落在右下角、和播放量同一行，跟左侧头像差不多高。
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StatLabel(COUIIcons.Play, video.playCountText, color = secondaryTextColor)
+                            if (video.danmakuText.isNotBlank()) {
+                                Spacer(Modifier.width(10.dp))
+                                StatLabel(COUIIcons.Messages, video.danmakuText, color = secondaryTextColor)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            MoreMenu(
+                                tint = secondaryTextColor,
+                                onWatchLater = onWatchLater,
+                                onShare = { shareVideo(context, video) },
+                            )
+                        }
+                    }
                 }
             }
         }
-    }
 
         CouiPopupMenu(
             show = menuExpanded,
