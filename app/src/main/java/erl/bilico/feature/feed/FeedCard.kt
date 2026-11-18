@@ -213,7 +213,7 @@ internal fun FeedCard(
             ) {
                 Text(
                     text = video.title,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     lineHeight = 21.sp,
                     fontWeight = FontWeight.Medium,
                     color = titleColor,
