@@ -1,4 +1,4 @@
-name: Build BiliCO APK for signing
+name: Build BiliCO preview APK
 
 on:
   push:
@@ -32,7 +32,6 @@ jobs:
         run: |
           ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository :coui-nav:publishAndroidPublicationToLocalRepository :coui-nav:publishKotlinMultiplatformPublicationToLocalRepository :coui-navigation3-ui:publishAndroidPublicationToLocalRepository :coui-navigation3-ui:publishKotlinMultiplatformPublicationToLocalRepository
           find build/repository/local -name "*.aar" | head -30
-      # Sign the assembled APK with the persistent BiliCO update key before distribution.
       - name: Assemble unsigned preview APK
         working-directory: BiliCO
         run: ./gradlew :app:assemblePreview --stacktrace
@@ -48,5 +47,90 @@ jobs:
         with:
           name: BiliCO-preview-R8-mapping
           path: BiliCO/app/build/outputs/mapping/preview/mapping.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: build
+    if: >-
+      github.repository == 'astarion1965974/BiliCO' &&
+      github.ref == 'refs/heads/build/keep-screen-on-apk' &&
+      vars.BILICO_SIGNING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    environment: bilico-preview-signing
+    steps:
+      - name: Download the unsigned APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: BiliCO-unsigned-APK
+          path: unsigned
+      - name: Sign and verify preview APK
+        id: apk
+        shell: bash
+        env:
+          BILICO_KEYSTORE_BASE64: ${{ secrets.BILICO_KEYSTORE_BASE64 }}
+          BILICO_KEYSTORE_PASSWORD: ${{ secrets.BILICO_KEYSTORE_PASSWORD }}
+          BILICO_KEY_PASSWORD: ${{ secrets.BILICO_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$BILICO_KEYSTORE_BASE64" || -z "$BILICO_KEYSTORE_PASSWORD" ]]; then
+            echo '::error::The BiliCO signing environment is missing the keystore or its password.'
+            exit 1
+          fi
+
+          build_tools=
+          while IFS= read -r directory; do
+            if [[ -x "$directory/apksigner" && -x "$directory/aapt" && -x "$directory/zipalign" ]]; then
+              build_tools=$directory
+              break
+            fi
+          done < <(find "${ANDROID_HOME:?}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -Vr)
+          if [[ -z "$build_tools" ]]; then
+            echo '::error::Android SDK build tools are unavailable.'
+            exit 1
+          fi
+
+          unsigned=unsigned/app-preview-unsigned.apk
+          badging=$("$build_tools/aapt" dump badging "$unsigned")
+          read -r package version_code version_name < <(awk -F "'" '/^package: / { print $2, $4, $6 }' <<< "$badging")
+          if [[ "$package" != erl.bilico.debug || ! "$version_code" =~ ^[1-9][0-9]*$ ||
+                ! "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?$ ]]; then
+            echo '::error::The APK package or version metadata does not match the BiliCO preview format.'
+            exit 1
+          fi
+
+          umask 077
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/bilico-signing.XXXXXXXX")
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          printf '%s' "$BILICO_KEYSTORE_BASE64" | base64 --decode > "$signing_dir/bilico-update.p12"
+          unset BILICO_KEYSTORE_BASE64
+          export BILICO_KEY_PASSWORD="${BILICO_KEY_PASSWORD:-$BILICO_KEYSTORE_PASSWORD}"
+
+          "$build_tools/zipalign" -f -P 16 4 "$unsigned" "$signing_dir/aligned.apk"
+          "$build_tools/apksigner" sign \
+            --ks "$signing_dir/bilico-update.p12" --ks-type PKCS12 --ks-key-alias bilico-update \
+            --ks-pass env:BILICO_KEYSTORE_PASSWORD --key-pass env:BILICO_KEY_PASSWORD \
+            --out "$signing_dir/signed.apk" "$signing_dir/aligned.apk"
+          unset BILICO_KEYSTORE_PASSWORD BILICO_KEY_PASSWORD
+
+          verification=$("$build_tools/apksigner" verify --print-certs "$signing_dir/signed.apk")
+          fingerprint=$(sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: ([[:xdigit:]]+)$/\1/p' <<< "$verification")
+          if [[ "${fingerprint,,}" != f19b32484e83bd662ca45ea0855aa434ecab50a204c3d05bb012f2dba7d33f03 ]]; then
+            echo '::error::The APK signature does not match the certificate used for BiliCO pre.11.'
+            exit 1
+          fi
+
+          mkdir -p signed
+          filename="BiliCO-$version_name.apk"
+          mv "$signing_dir/signed.apk" "signed/$filename"
+          printf 'path=signed/%s\n' "$filename" >> "$GITHUB_OUTPUT"
+          printf 'Verified %s (%s), versionCode %s, certificate SHA-256 %s\n' \
+            "$filename" "$package" "$version_code" "$fingerprint"
+      - name: Upload the signed APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: BiliCO-signed-APK
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 7

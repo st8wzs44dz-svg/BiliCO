@@ -41,9 +41,27 @@ Kotlin · Jetpack Compose · COUI
 
 个人预览版（`assemblePreview`，包名 `erl.bilico.debug`）通过 [个人仓库的 Releases](https://github.com/astarion1965974/BiliCO/releases) 获取更新。`0.2.11-pre.11` 可手动覆盖安装 `0.2.11-pre.12`，之后可在 App 的「检查更新」中获取新版。
 
-1. 每次发布新 APK 时，递增 `app/build.gradle.kts` 中的 `versionName` 和 `versionCode`。使用匹配 `versionName` 的标签，例如 `v0.2.11-pre.12` 对应 `0.2.11-pre.12`、`versionCode` 133。
-2. 从 [构建工作流](https://github.com/astarion1965974/BiliCO/actions/workflows/build-keep-screen-on-apk.yml) 下载该提交的未签名 APK。在可信环境中，用签署 `pre.11` 的原有密钥和别名签署新 APK。对现有已签名 APK 和新 APK 分别运行 `apksigner verify --print-certs`，确认签名证书的 SHA-256 指纹一致。
-3. 在个人仓库创建对应标签的 GitHub Release，勾选 Pre-release，添加更新日志并附上已签名的 `BiliCO-0.2.11-pre.12.apk`，然后发布。后续版本沿用 `BiliCO-<versionName>.apk` 命名。
+1. 每次发包时，在 `app/build.gradle.kts` 递增 `versionName` 和 `versionCode`，并推送到 `build/keep-screen-on-apk`。例如 `0.2.11-pre.12` 对应 `versionCode` 133。
+2. 从该提交的 [GitHub Actions 构建](https://github.com/astarion1965974/BiliCO/actions/workflows/build-keep-screen-on-apk.yml) 下载 `BiliCO-signed-APK`，解压获得 `BiliCO-<versionName>.apk`。
+3. 在个人仓库创建标签为 `v<versionName>` 的 GitHub Pre-release，填写更新日志，附上签名 APK 后发布。标签 `v0.2.11-pre.12` 对应 `BiliCO-0.2.11-pre.12.apk`。
+
+#### 一次性配置自动签名
+
+1. 进入仓库 **Settings → Environments** 创建 `bilico-preview-signing`。在 **Deployment branches and tags** 选择 **Selected branches and tags**，添加分支规则 `build/keep-screen-on-apk`。如需推送后自动签名，保持 **Required reviewers** 关闭。
+2. 在原签名环境中，将签署 `pre.11` 的原 PKCS#12 密钥库和密码存入该 Environment。密钥别名为 `bilico-update`。以下命令使用有仓库管理权限的 GitHub 登录，`BILICO_KEYSTORE_PATH` 指向原密钥库。
+
+   ```bash
+   base64 -w0 "$BILICO_KEYSTORE_PATH" | gh secret set BILICO_KEYSTORE_BASE64 --env bilico-preview-signing --repo astarion1965974/BiliCO
+   gh secret set BILICO_KEYSTORE_PASSWORD --env bilico-preview-signing --repo astarion1965974/BiliCO
+   ```
+
+   第二条命令会提示输入密码。若私钥条目有单独密码，同样设置 Environment Secret `BILICO_KEY_PASSWORD`。
+
+3. 保护规则和密钥配置完成后，设置仓库级 Actions 变量 `BILICO_SIGNING_ENABLED=true`。下一次推送会创建签名产物，签名证书必须匹配 `pre.11` 才会上传。
+
+   ```bash
+   gh variable set BILICO_SIGNING_ENABLED --body true --repo astarion1965974/BiliCO
+   ```
 
 ## 🛠️ 本地构建
 
