@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import erl.bilico.data.model.Comment
 import erl.bilico.data.model.CommentEmotePackage
+import erl.bilico.data.model.CommentSort
 import erl.bilico.data.model.DEFAULT_EMOTE_MANAGE_URL
 import erl.bilico.data.model.DynamicImage
 import erl.bilico.di.AppContainer
@@ -342,6 +343,8 @@ internal fun ReplyDetailPage(
     val pageBg = pageContainerColor()
     val listBackground = if (threadedReplies) COUITheme.colorScheme.surfaceContainer else pageBg
     val threadLineColor = COUITheme.colorScheme.dividerLine
+    val avatarSize = density.flatCommentAvatarSize()
+    val replyIndent = maxOf(24.dp, avatarSize / 2f + 9.dp)
     val parentOpenBvid = LocalOpenBvid.current
     val parentSeek = LocalCommentSeek.current
     val threadUserMids = remember(detailState.rootComment, detailState.items) {
@@ -394,7 +397,7 @@ internal fun ReplyDetailPage(
                     ReplyRowSurface(
                         flat = threadedReplies,
                         modifier = if (threadedReplies && replyRows.isNotEmpty()) {
-                            Modifier.replyRootLine(threadLineColor)
+                            Modifier.replyRootLine(threadLineColor, avatarSize)
                         } else Modifier,
                     ) {
                         BiliCommentItem(
@@ -433,10 +436,6 @@ internal fun ReplyDetailPage(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
-                        CommentSortTabRow(
-                            sort = detailState.sort,
-                            onSelectSort = detailState::selectSort,
-                        )
                     }
                 }
 
@@ -458,8 +457,8 @@ internal fun ReplyDetailPage(
                         ReplyRowSurface(
                             flat = threadedReplies,
                             modifier = if (threadedReplies) {
-                                Modifier.replyBranchLines(row, threadLineColor)
-                                    .padding(start = ReplyIndent * row.depth, top = ReplyRowTopPadding)
+                                Modifier.replyBranchLines(row, threadLineColor, avatarSize, replyIndent)
+                                    .padding(start = replyIndent * row.depth, top = ReplyRowTopPadding)
                             } else {
                                 Modifier.padding(top = 10.dp)
                             },
@@ -517,6 +516,12 @@ internal fun ReplyDetailPage(
                 },
                 containerColor = pageBg,
                 backdrop = overlayBackdrop,
+                sort = detailState.sort,
+                onToggleSort = {
+                    val next = if (detailState.sort == CommentSort.Hot) CommentSort.New else CommentSort.Hot
+                    detailState.selectSort(next)
+                    listState.requestScrollToItem(0)
+                },
                 onClose = onClose,
                 modifier = Modifier.align(Alignment.TopCenter),
                 topInset = topInset,

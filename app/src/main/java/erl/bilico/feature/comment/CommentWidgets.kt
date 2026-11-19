@@ -47,6 +47,7 @@ import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -77,8 +78,18 @@ private const val FOLDED_COMMENT_LINES = 8
 
 private val LocationPrefix = Regex("^IP\\s*属地\\s*[:：]\\s*", RegexOption.IGNORE_CASE)
 private val CommentAvatarGap = 12.dp
-internal val ReplyRootAvatarSize = 38.dp
-internal val ReplyChildAvatarSize = 32.dp
+private val FlatCommentAvatarGap = 8.dp
+private val FlatCommentNameLineHeight = 17.sp
+private val FlatCommentMetaLineHeight = 12.sp
+private val FlatCommentMetaGap = 1.dp
+private val FlatCommentSectionGap = 8.dp
+private val FlatCommentActionPadding = 6.dp
+
+internal fun Density.flatCommentAvatarSize(): Dp = (
+    FlatCommentNameLineHeight.toDp().roundToPx() +
+        FlatCommentMetaGap.roundToPx() +
+        FlatCommentMetaLineHeight.toDp().roundToPx()
+    ).toDp()
 
 /** 视频主评论使用平铺样式，回复详情和其他入口共用原有评论内容。 */
 @OptIn(ExperimentalFoundationApi::class)
@@ -105,7 +116,12 @@ internal fun BiliCommentItem(
     // 不可折叠时整段正文始终铺满，点击正文也不再翻转展开态。
     val unfolded = !expandable || expanded
     val density = LocalDensity.current
-    val avatarDp = if (isSubReply) ReplyChildAvatarSize else ReplyRootAvatarSize
+    val avatarDp = when {
+        flat -> density.flatCommentAvatarSize()
+        isSubReply -> 32.dp
+        else -> 38.dp
+    }
+    val avatarGap = if (flat) FlatCommentAvatarGap else CommentAvatarGap
     val avatarPx = with(density) { avatarDp.roundToPx() }
     val openUser = remember(comment.mid, onOpenUser) {
         { if (comment.mid > 0L) onOpenUser(comment.mid) }
@@ -143,7 +159,9 @@ internal fun BiliCommentItem(
             .fillMaxWidth()
             .then(
                 if (replyCenter != null) {
-                    Modifier.replyThreadLine(avatarDp, COUITheme.colorScheme.dividerLine) { replyCenter.floatValue }
+                    Modifier.replyThreadLine(avatarDp, avatarGap, COUITheme.colorScheme.dividerLine) {
+                        replyCenter.floatValue
+                    }
                 } else {
                     Modifier
                 },
@@ -170,19 +188,23 @@ internal fun BiliCommentItem(
                 .clip(CircleShape)
                 .clickable(onClick = openUser),
         )
-        Spacer(Modifier.width(CommentAvatarGap))
+        Spacer(Modifier.width(avatarGap))
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier.weight(1f).then(if (flat) Modifier.height(avatarDp) else Modifier),
+                    verticalArrangement = if (flat) Arrangement.Center else Arrangement.Top,
+                ) {
                     UserNameWithBadges(
                         userName = comment.userName,
                         level = comment.level,
                         isUp = comment.isUp,
                         nameColor = nameColor,
                         onClick = openUser,
+                        flat = flat,
                     )
                     val metaText = remember(comment.timeSec, comment.location, flat) {
                         val datePart = Formatters.formatCommentDate(comment.timeSec)
@@ -194,14 +216,19 @@ internal fun BiliCommentItem(
                         }
                     }
                     if (metaText.isNotEmpty()) {
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(if (flat) FlatCommentMetaGap else 2.dp))
                         Text(
                             text = metaText,
+                            modifier = if (flat) {
+                                Modifier.height(with(density) { FlatCommentMetaLineHeight.toDp() })
+                            } else Modifier,
                             style = COUITheme.textStyles.footnote2.copy(
-                                fontSize = 11.5.sp,
-                                lineHeight = 15.sp,
+                                fontSize = if (flat) 10.5.sp else 11.5.sp,
+                                lineHeight = if (flat) FlatCommentMetaLineHeight else 15.sp,
                             ),
                             color = metaColor,
+                            maxLines = if (flat) 1 else Int.MAX_VALUE,
+                            overflow = if (flat) TextOverflow.Ellipsis else TextOverflow.Clip,
                         )
                     }
                 }
@@ -223,7 +250,7 @@ internal fun BiliCommentItem(
             }
 
             if (comment.content.isNotBlank() || comment.emotes.isNotEmpty() || comment.pictures.isEmpty()) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(FlatCommentSectionGap))
                 RichCommentText(
                     content = comment.content,
                     emotes = comment.emotes,
@@ -270,7 +297,8 @@ internal fun BiliCommentItem(
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
+            val actionGap = if (flat) FlatCommentSectionGap - FlatCommentActionPadding else 10.dp
+            Spacer(Modifier.height(actionGap))
 
             CommentActionBar(
                 liked = comment.liked,
@@ -388,6 +416,7 @@ internal fun BiliCommentItem(
 
 private fun Modifier.replyThreadLine(
     avatarSize: Dp,
+    avatarGap: Dp,
     color: Color,
     replyCenter: () -> Float,
 ): Modifier = drawWithCache {
@@ -397,7 +426,7 @@ private fun Modifier.replyThreadLine(
     val path = Path().apply {
         if (toY > fromY) {
             val avatarX = avatarSize.toPx() / 2f
-            val tailX = (avatarSize + CommentAvatarGap - 10.dp).toPx()
+            val tailX = (avatarSize + avatarGap - 6.dp).toPx()
             val fromX = if (layoutDirection == LayoutDirection.Ltr) avatarX else size.width - avatarX
             val toX = if (layoutDirection == LayoutDirection.Ltr) tailX else size.width - tailX
             val direction = if (layoutDirection == LayoutDirection.Ltr) 1f else -1f
@@ -504,6 +533,7 @@ private fun UserNameWithBadges(
     isUp: Boolean,
     nameColor: Color,
     onClick: () -> Unit,
+    flat: Boolean,
 ) {
     val density = LocalDensity.current
     val lvWidthSp = with(density) { 24.dp.toSp() }
@@ -541,15 +571,18 @@ private fun UserNameWithBadges(
 
     Text(
         text = annotated,
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .then(if (flat) Modifier.height(with(density) { FlatCommentNameLineHeight.toDp() }) else Modifier)
+            .clickable(onClick = onClick),
         style = COUITheme.textStyles.body2.copy(
             fontSize = 13.5.sp,
-            lineHeight = 18.sp,
+            lineHeight = if (flat) FlatCommentNameLineHeight else 18.sp,
             fontWeight = FontWeight.Medium,
         ),
         color = nameColor,
-        softWrap = true,
-        overflow = TextOverflow.Visible,
+        softWrap = !flat,
+        maxLines = if (flat) 1 else Int.MAX_VALUE,
+        overflow = if (flat) TextOverflow.Ellipsis else TextOverflow.Visible,
         inlineContent = inlineContent,
     )
 }
@@ -630,7 +663,7 @@ private fun CommentIconAction(
         modifier = Modifier
             .clip(SquircleShape(6.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = horizontalPadding, vertical = if (flat) 6.dp else 2.dp),
+            .padding(horizontal = horizontalPadding, vertical = if (flat) FlatCommentActionPadding else 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, label, Modifier.size(if (flat) 18.dp else 16.dp), tint = color)

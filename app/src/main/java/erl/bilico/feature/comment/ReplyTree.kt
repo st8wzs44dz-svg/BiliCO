@@ -6,6 +6,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import erl.bilico.data.model.Comment
@@ -49,13 +50,12 @@ internal fun buildReplyRows(rootId: Long, replies: List<Comment>): List<ReplyRow
     }
 }
 
-internal val ReplyIndent = 28.dp
 internal val ReplyRowTopPadding = 12.dp
 
-internal fun Modifier.replyRootLine(color: Color): Modifier = drawWithCache {
-    val center = ReplyRootAvatarSize.toPx() / 2f
+internal fun Modifier.replyRootLine(color: Color, avatarSize: Dp): Modifier = drawWithCache {
+    val center = avatarSize.toPx() / 2f
     val x = if (layoutDirection == LayoutDirection.Ltr) center else size.width - center
-    val start = (ReplyRootAvatarSize + 4.dp).toPx()
+    val start = (avatarSize + 4.dp).toPx()
     onDrawBehind {
         if (start < size.height) {
             drawLine(color, Offset(x, start), Offset(x, size.height), strokeWidth = 1.dp.toPx())
@@ -63,18 +63,23 @@ internal fun Modifier.replyRootLine(color: Color): Modifier = drawWithCache {
     }
 }
 
-internal fun Modifier.replyBranchLines(row: ReplyRow, color: Color): Modifier = drawWithCache {
-    val indent = ReplyIndent.toPx()
-    val rootRail = ReplyRootAvatarSize.toPx() / 2f
-    val branchRail = indent + ReplyChildAvatarSize.toPx() / 2f
-    val avatarCenterY = ReplyRowTopPadding.toPx() + ReplyChildAvatarSize.toPx() / 2f
-    val belowAvatar = (ReplyRowTopPadding + ReplyChildAvatarSize + 4.dp).toPx()
+internal fun Modifier.replyBranchLines(
+    row: ReplyRow,
+    color: Color,
+    avatarSize: Dp,
+    replyIndent: Dp,
+): Modifier = drawWithCache {
+    val indent = replyIndent.roundToPx().toFloat()
+    val rootRail = avatarSize.toPx() / 2f
+    val branchRail = indent + rootRail
+    val avatarCenterY = ReplyRowTopPadding.roundToPx() + rootRail
+    val belowAvatar = ReplyRowTopPadding.roundToPx() + (avatarSize + 4.dp).toPx()
     val gap = 4.dp.toPx()
     fun x(start: Float) = if (layoutDirection == LayoutDirection.Ltr) start else size.width - start
 
     val path = Path().apply {
         val rail = if (row.depth == 1) rootRail else branchRail
-        val end = row.depth * indent - gap
+        val end = (replyIndent * row.depth).roundToPx() - gap
         val bend = minOf(8.dp.toPx(), end - rail, avatarCenterY)
         moveTo(x(rail), 0f)
         lineTo(x(rail), avatarCenterY - bend)

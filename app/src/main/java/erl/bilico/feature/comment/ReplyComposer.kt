@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import erl.bilico.data.model.Comment
 import erl.bilico.data.model.CommentEmote
 import erl.bilico.data.model.CommentEmotePackage
+import erl.bilico.data.model.CommentSort
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.components.COUISmoothCapsuleShape
 import erl.bilico.ui.components.EmptyState
@@ -53,6 +54,7 @@ import io.github.suqi8.coui.kmp.basic.HighlightedIconButton
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.LocalToolbarBackdropBlurFraction
 import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TopAppBarDefaults
 import io.github.suqi8.coui.kmp.blur.Backdrop
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.ProgressiveBlur
@@ -193,6 +195,8 @@ internal fun ReplyDetailTopBar(
     scrollFraction: () -> Float,
     containerColor: Color,
     backdrop: Backdrop?,
+    sort: CommentSort,
+    onToggleSort: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     topInset: Dp = 0.dp,
@@ -248,7 +252,7 @@ internal fun ReplyDetailTopBar(
                     modifier = Modifier
                         .layoutId("content")
                         .fillMaxWidth()
-                        .padding(start = 20.dp, top = topInset, end = 16.dp)
+                        .padding(start = 20.dp, top = topInset, end = TopAppBarDefaults.ActionIconPadding)
                         .height(48.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
@@ -261,16 +265,25 @@ internal fun ReplyDetailTopBar(
                         ),
                         color = COUITheme.colorScheme.onSurface,
                     )
-                    HighlightedIconButton(
-                        onClick = onClose,
-                        backdrop = backdrop,
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(TopAppBarDefaults.ActionMenuItemSpacing),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            imageVector = COUIIcons.Basic.Close,
-                            contentDescription = "关闭",
-                            tint = COUITheme.colorScheme.onSurfaceSecondary,
-                            modifier = Modifier.size(19.dp),
-                        )
+                        HighlightedIconButton(onClick = onToggleSort, backdrop = backdrop) {
+                            CommentSortIcon(
+                                sort = sort,
+                                contentDescription = commentSortDescription(sort),
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                        HighlightedIconButton(onClick = onClose, backdrop = backdrop) {
+                            Icon(
+                                imageVector = COUIIcons.Basic.Close,
+                                contentDescription = "关闭",
+                                tint = COUITheme.colorScheme.onSurfaceSecondary,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
                     }
                 }
             }
