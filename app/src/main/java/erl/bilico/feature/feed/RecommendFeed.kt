@@ -14,19 +14,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyGridLayoutInfo
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -40,9 +44,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.SingletonImageLoader
+import coil3.annotation.ExperimentalCoilApi
+import coil3.decode.BlackholeDecoder
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
-import coil3.size.Precision
-import coil3.size.Scale
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
@@ -82,6 +87,11 @@ private const val CoverPrefetchRows = 2
 private const val CoverPrefetchParallelism = 2
 private const val FeedCardContentType = "feed-card"
 
+private fun LazyGridLayoutInfo.visibleVideoCards() = visibleItemsInfo.filter { item ->
+    item.contentType == FeedCardContentType &&
+        item.offset.y < viewportEndOffset && item.offset.y + item.size.height > viewportStartOffset
+}
+
 /** 刷新拼接线的固定 key，重排时不会和视频卡片抢位置。 */
 private const val RefreshDividerKey = "feed-refresh-divider"
 
@@ -98,6 +108,7 @@ private data class ShownFeed(
 
 /** 推荐分段：原来的首页推荐列表，外面那层分段胶囊归 [FeedScreen]。 */
 @Composable
+@OptIn(ExperimentalCoilApi::class)
 internal fun RecommendFeed(
     container: AppContainer,
     nav: NavState,
@@ -140,39 +151,40 @@ internal fun RecommendFeed(
     }
 
     val context = LocalContext.current
-    val incomingItems = rememberUpdatedState(
-        state.items.takeIf { shown.items.isNotEmpty() && state.refreshSerial != shown.serial },
-    )
-    LaunchedEffect(active, listState, context, coverWidthPx, coverHeightPx) {
-        if (!active || coverWidthPx <= 0 || coverHeightPx <= 0) return@LaunchedEffect
+    val imageWorkActive = active && nav.stack.lastOrNull()?.route == Route.Main
+    val batchSettled = shown.serial == state.refreshSerial
+    val settledCovers = remember { mutableStateMapOf<String, String>() }
+    val visibleKeys by remember(listState) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            listState.layoutInfo.visibleVideoCards().mapTo(HashSet()) { it.key }
+        }
+    }
+    LaunchedEffect(imageWorkActive, batchSettled, listState, context, coverWidthPx, coverHeightPx) {
+        if (!imageWorkActive || !batchSettled || coverWidthPx <= 0 || coverHeightPx <= 0) return@LaunchedEffect
         val loader = SingletonImageLoader.get(context)
         val permits = Semaphore(CoverPrefetchParallelism)
         val requests = mutableMapOf<String, Job>()
         val count = CoverPrefetchRows * FeedColumns
         snapshotFlow {
-            val incoming = incomingItems.value
-            if (incoming != null) {
-                // 旧列表淡出期间优先准备新首屏，换完后继续按视口预取。
-                incoming to (0 until minOf(count, incoming.size))
-            } else {
-                val feed = shown
-                val visible = listState.layoutInfo.visibleItemsInfo
-                val backward = listState.lastScrolledBackward
-                val anchor = if (backward) {
-                    visible.firstOrNull { it.contentType == FeedCardContentType }
-                } else {
-                    visible.lastOrNull { it.contentType == FeedCardContentType }
-                }
-                val index = anchor?.index ?: return@snapshotFlow feed.items to IntRange.EMPTY
-                val hasDivider = feed.inserted in 1 until feed.items.size
-                val cardIndex = if (hasDivider && index > feed.inserted) index - 1 else index
-                val range = if (backward) {
-                    minOf(cardIndex, feed.items.size) - 1 downTo maxOf(0, cardIndex - count)
-                } else {
-                    cardIndex + 1 until minOf(feed.items.size, cardIndex + 1 + count)
-                }
-                feed.items to range
+            val feed = shown
+            val visible = listState.layoutInfo.visibleVideoCards()
+            val hasDivider = feed.inserted in 1 until feed.items.size
+            fun cardIndex(index: Int) = if (hasDivider && index > feed.inserted) index - 1 else index
+            val visibleCoversSettled = visible.all { row ->
+                val video = feed.items.getOrNull(cardIndex(row.index))
+                video != null && video.bvid == row.key && settledCovers[video.bvid] == video.cover
             }
+            if (visible.isEmpty() || !visibleCoversSettled) {
+                return@snapshotFlow feed.items to IntRange.EMPTY
+            }
+            val range = if (listState.lastScrolledBackward) {
+                val first = cardIndex(visible.first().index)
+                first - 1 downTo maxOf(0, first - count)
+            } else {
+                val last = cardIndex(visible.last().index)
+                last + 1 until minOf(feed.items.size, last + 1 + count)
+            }
+            feed.items to range
         }.collect { (items, indices) ->
             val urls = indices.mapTo(linkedSetOf()) { index ->
                 Formatters.sizedImageUrl(items[index].cover, coverWidthPx, coverHeightPx)
@@ -189,9 +201,8 @@ internal fun RecommendFeed(
                             loader.execute(
                                 ImageRequest.Builder(context)
                                     .data(url)
-                                    .size(coverWidthPx, coverHeightPx)
-                                    .scale(Scale.FILL)
-                                    .precision(Precision.INEXACT)
+                                    .memoryCachePolicy(CachePolicy.DISABLED)
+                                    .decoderFactory(BlackholeDecoder.Factory())
                                     .build(),
                             )
                         }
@@ -284,6 +295,12 @@ internal fun RecommendFeed(
             val card: @Composable (FeedVideo) -> Unit = { video ->
                 val origin = rememberExpandOrigin()
                 val topBar = LocalTopBarBounds.current
+                val visible by remember(listState, video.bvid) {
+                    derivedStateOf { video.bvid in visibleKeys }
+                }
+                DisposableEffect(video.bvid, video.cover) {
+                    onDispose { settledCovers.remove(video.bvid) }
+                }
                 SideEffect {
                     origin.attachToRow(listState.asRowScrollState(), video.bvid, topBar)
                 }
@@ -294,6 +311,8 @@ internal fun RecommendFeed(
                     modifier = Modifier.expandOrigin(origin),
                     onOpen = { nav.push(Route.Video(video.bvid), origin) },
                     onWatchLater = rememberWatchLaterAction(container, video),
+                    generateBackground = imageWorkActive && visible,
+                    onCoverSettled = { settledCovers[video.bvid] = video.cover },
                 )
             }
             items(

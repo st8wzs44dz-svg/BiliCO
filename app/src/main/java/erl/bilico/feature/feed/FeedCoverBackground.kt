@@ -61,6 +61,7 @@ internal fun rememberFeedCoverBackground(
     coverReady: Boolean,
     cardSize: IntSize,
     coverHeight: Int,
+    generateBackground: Boolean,
 ): ImageBitmap? {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -83,8 +84,8 @@ internal fun rememberFeedCoverBackground(
         }
     }
     var background by remember(key) { mutableStateOf(key?.let { backgroundCache.get(it) }) }
-    LaunchedEffect(key, coverReady) {
-        if (key == null || !coverReady || background != null) return@LaunchedEffect
+    LaunchedEffect(key, coverReady, generateBackground) {
+        if (key == null || !coverReady || !generateBackground || background != null) return@LaunchedEffect
         val thumbnailWidth = with(density) { 48.dp.roundToPx() }.coerceAtLeast(1)
         val thumbnailUrl = Formatters.sizedImageUrl(originalUrl, thumbnailWidth, (thumbnailWidth * 9 / 16).coerceAtLeast(1))
         background = backgroundWorker.withPermit {

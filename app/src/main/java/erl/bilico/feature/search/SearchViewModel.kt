@@ -28,13 +28,12 @@ class SearchViewModel(
     private var lastSuggestTerm: String = ""
 
     init {
-        loadHot()
         val initial = initialQuery.trim()
         if (initial.isNotEmpty()) submit(initial)
     }
 
     fun loadHot() {
-        if (_state.value.hot.isNotEmpty()) return
+        if (_state.value.hot.isNotEmpty() || _state.value.hotLoading) return
         _state.update { it.copy(hotLoading = true) }
         viewModelScope.launch {
             val list = repository.hotWords().getOrDefault(emptyList())

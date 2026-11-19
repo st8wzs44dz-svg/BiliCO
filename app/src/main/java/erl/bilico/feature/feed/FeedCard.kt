@@ -71,6 +71,8 @@ internal fun FeedCard(
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
     onWatchLater: () -> Unit,
+    generateBackground: Boolean = true,
+    onCoverSettled: () -> Unit = {},
 ) {
     val coverUrl = remember(video.cover, coverWidthPx, coverHeightPx) {
         Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx)
@@ -90,7 +92,9 @@ internal fun FeedCard(
     var coverReady by remember(coverUrl) { mutableStateOf(false) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
     var coverHeight by remember { mutableStateOf(0) }
-    val background = rememberFeedCoverBackground(video.cover, coverUrl, coverReady, cardSize, coverHeight)
+    val background = rememberFeedCoverBackground(
+        video.cover, coverUrl, coverReady, cardSize, coverHeight, generateBackground,
+    )
     val showDarkBlur = background != null
     val titleColor = if (showDarkBlur) Color.White else scheme.onSurface
     val secondaryTextColor = if (showDarkBlur) {
@@ -115,8 +119,14 @@ internal fun FeedCard(
                         model = coverUrl,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        onSuccess = { coverReady = true },
-                        onError = { coverReady = false },
+                        onSuccess = {
+                            coverReady = true
+                            onCoverSettled()
+                        },
+                        onError = {
+                            coverReady = false
+                            onCoverSettled()
+                        },
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                     )
                     if (background != null) {

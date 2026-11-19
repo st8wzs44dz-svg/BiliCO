@@ -150,6 +150,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
 
     LaunchedEffect(searchExpanded) {
         if (searchExpanded) {
+            searchViewModel.loadHot()
             panelProgress.snapTo(1f)
             panelAlpha.animateTo(
                 targetValue = 1f,
