@@ -30,14 +30,17 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -126,8 +129,8 @@ private fun openVideoTarget(
 @Composable
 internal fun BiliCoRoot(
     container: AppContainer,
-    externalVideoLink: ExternalVideoLink?,
-    onVideoLinkHandled: (ExternalVideoLink) -> Unit,
+    externalVideoLink: ExternalVideoLink? = null,
+    onVideoLinkHandled: (ExternalVideoLink) -> Unit = {},
 ) {
     val nav = remember { NavState() }
     val origins = remember { ImageOrigins() }
@@ -137,11 +140,15 @@ internal fun BiliCoRoot(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val inAppBackgroundPlay by container.settings.inAppBackgroundPlay.collectAsStateWithLifecycle()
+    val returnBounce by container.settings.returnBounce.collectAsStateWithLifecycle()
+    val darkMode by container.settings.darkMode.collectAsStateWithLifecycle()
+    val dark = isDarkTheme(darkMode)
     SideEffect {
         nav.attach(scope, context)
         nav.orbOrigin = orbOrigin
         nav.secondaryOrbOrigin = secondaryOrbOrigin
         nav.inAppBackgroundPlay = { inAppBackgroundPlay }
+        nav.returnBounce = { returnBounce }
         viewerHost.attach(scope)
     }
 
@@ -151,11 +158,17 @@ internal fun BiliCoRoot(
         if (bvid == null) {
             Toast.makeText(context, "无法打开此视频链接", Toast.LENGTH_SHORT).show()
         } else {
-            val current = nav.stack.lastOrNull()?.route as? Route.Video
+            val current = nav.stack.lastOrNull { !it.exiting }?.route as? Route.Video
             if (current?.bvid != bvid) {
                 nav.push(Route.Video(bvid, startSec = link.startSec))
             } else if (link.startSec > 0L) {
-                nav.replaceTop(Route.Video(bvid, startSec = link.startSec))
+                val active = PlaybackBridge.activePlayer
+                if (active != null) {
+                    active.seekTo(link.startSec * 1000L)
+                    if (!active.isPlaying) active.play()
+                } else {
+                    nav.replaceTop(Route.Video(bvid, startSec = link.startSec))
+                }
             }
         }
         onVideoLinkHandled(link)
@@ -184,7 +197,7 @@ internal fun BiliCoRoot(
 
     // 搜索框带着焦点跳页时，输入法的候选栏会浮在新页面上；每次切页都清一次焦点。
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(nav.stack.size) { focusManager.clearFocus(force = true) }
+    LaunchedEffect(nav.stack.count { !it.exiting }) { focusManager.clearFocus(force = true) }
 
     BiliCoPredictiveBackHandler(nav, enabled = viewerHost.active == null)
 
@@ -193,6 +206,7 @@ internal fun BiliCoRoot(
 
     CompositionLocalProvider(
         LocalNavState provides nav,
+        LocalExpandOriginVisibility provides remember(nav) { ExpandOriginVisibility(nav.stack) },
         LocalImageOrigins provides origins,
         LocalImageViewerHost provides viewerHost,
         LocalOpenBvid provides { target -> openVideoTarget(target, nav, container, context, scope) },
@@ -209,7 +223,9 @@ internal fun BiliCoRoot(
         if (windowPortrait) frozenPortrait.capture(configuration, constraints.maxWidth, constraints.maxHeight)
 
         // backdrop 只挂在这一层：整栈内容录一次就够，逐页各录一次是白费。
-        Box(Modifier.fillMaxSize().layerBackdropIf(BlurEffectsEnabled, rootBackdrop)) {
+        val gpuWarmup = rememberLayerPipelineWarmup(nav)
+        val cornerPx = with(LocalDensity.current) { screenCorner.toPx() }
+        val stackContent: @Composable () -> Unit = {
             Box(Modifier.fillMaxSize().background(pageSurface))
             val minimized = nav.minimizedEntry
             val layers = buildList {
@@ -231,6 +247,32 @@ internal fun BiliCoRoot(
                     )
                 }
             }
+        }
+        // 这两层节点常驻，warmup 只改图层属性、不动组合结构。否则 1.5s 时父节点树变两次，
+        // 整棵 stackContent 会被销毁重建两次：正在滑的首页断触、滚动位置复位、图片重新请求。
+        // 结构和展开转场同构：外层圆角裁剪、内层离屏。全屏半径下画面看不出变化，
+        // 但离屏 + 圆角裁剪这条路径会真的走一遍，退出转场要用的管线提前编好。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val warming = gpuWarmup.active && size.height > 0f
+                    clip = warming
+                    shape = if (warming) ExpandShape(size.height, cornerPx) else RectangleShape
+                },
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        compositingStrategy = if (gpuWarmup.active) {
+                            CompositingStrategy.Offscreen
+                        } else {
+                            CompositingStrategy.Auto
+                        }
+                    }
+                    .layerBackdropIf(BlurEffectsEnabled, rootBackdrop),
+            ) { stackContent() }
         }
         // 滑动退场/进场且窗口缩小时四角会露出窗口底色，补一层页面底色，只画在超级椭圆外侧。
         val cornerMaskCache = remember(cornerShape) {
@@ -265,9 +307,19 @@ internal fun BiliCoRoot(
                 },
         )
 
-        val topEntry = nav.stack.lastOrNull()
+        val topEntry = nav.stack.lastOrNull { !it.exiting }
         val topRoute = topEntry?.route
-        val showSecondaryOrb = !LocalInPipMode.current &&
+        val inPipMode = LocalInPipMode.current
+        val wantLightStatusBars = !dark &&
+            viewerHost.active == null &&
+            (topEntry == null || !topEntry.route.isPlayback() || inPipMode || topEntry.collapsedBarVisible)
+        SyncStatusBarAppearance(
+            lightStatusBars = wantLightStatusBars,
+            dark = dark,
+            orientation = configuration.orientation,
+            syncTick = nav.statusBarSyncTick,
+        )
+        val showSecondaryOrb = !inPipMode &&
             nav.minimizedEntry != null &&
             topRoute != null &&
             topRoute != Route.Main &&
@@ -330,13 +382,9 @@ private fun UpdatePrompt(container: AppContainer) {
 /** 页面跟着手指往回收的返回动画；根页面不注册，交给系统播退回桌面的动画。 */
 @Composable
 fun BiliCoPredictiveBackHandler(nav: NavState, enabled: Boolean = true) {
-    PredictiveBackHandler(enabled = enabled && nav.stack.size > 1) { events ->
-        val entry = nav.stack.lastOrNull()
-        if (entry == null || nav.stack.size <= 1) {
-            events.collect { }
-            return@PredictiveBackHandler
-        }
-        if (entry.exiting) {
+    PredictiveBackHandler(enabled = enabled && nav.stack.count { !it.exiting } > 1) { events ->
+        val entry = nav.stack.lastOrNull { !it.exiting }
+        if (entry == null || nav.stack.count { !it.exiting } <= 1) {
             events.collect { }
             return@PredictiveBackHandler
         }
@@ -345,36 +393,28 @@ fun BiliCoPredictiveBackHandler(nav: NavState, enabled: Boolean = true) {
         var moved = false
         entry.previewing = true
         nav.preparePredictivePop(entry)
+        val cardCollapse = entry.expand && !entry.minimizingToOrb
         try {
             events.collect { event ->
-                val value = (1f - event.progress).coerceIn(0f, 1f)
+                val raw = event.progress
+                val value = if (cardCollapse) (1f - raw / (1f - LandedProgress)).coerceIn(0f, 1f) else (1f - raw).coerceIn(0f, 1f)
                 if (value < 0.98f) moved = true
                 lastProgress = value
                 entry.progress.snapTo(value)
                 if (entry.expand) entry.fade.snapTo(value)
             }
-            if (lastProgress <= 0.02f && moved) {
-                nav.completePredictivePop(entry)
-            } else {
-                nav.pop()
-            }
+            finishPredictivePop(nav, entry, lastProgress, moved)
         } catch (cancelled: CancellationException) {
-            // 已经落回卡片了：系统把这叫取消，但没什么可预览的，直接走。
-            if (lastProgress <= LandedProgress && moved) {
-                nav.completePredictivePop(entry)
+            val landed = if (cardCollapse) lastProgress <= 0.05f else lastProgress <= LandedProgress
+            if (landed && moved) {
+                finishPredictivePop(nav, entry, lastProgress, moved)
                 return@PredictiveBackHandler
             }
             // 松手太早：让页面顺着手指弹回去。
             withContext(NonCancellable) {
                 coroutineScope {
-                    launch {
-                        entry.progress.animateTo(1f, tween(180, easing = ExpandEasing))
-                    }
-                    if (entry.expand) {
-                        launch {
-                            entry.fade.animateTo(1f, tween(180, easing = LinearEasing))
-                        }
-                    }
+                    launch { entry.progress.animateTo(1f, ExpandCancelSpringSpec) }
+                    if (entry.expand) launch { entry.fade.animateTo(1f, tween(200, easing = LinearEasing)) }
                 }
                 nav.cancelPredictivePop(entry)
             }
@@ -397,33 +437,27 @@ private fun RouteLayer(
     // 只在图层和绘制块里读，手势进行时失效的是图层，不会重组整页。
     val progress: () -> Float = { entry.progress.value }
     val isMinimized = index < 0
-    val isTop = !isMinimized && index == lastIndex
-    val belowTop = !isMinimized && index == lastIndex - 1
-    val top = nav.stack.lastOrNull()
-    val topProgress: () -> Float = { top?.progress?.value ?: 1f }
+    val activeTop = nav.stack.lastOrNull { !it.exiting }
+    val activeBelowTop = nav.stack.filter { !it.exiting }.let { if (it.size >= 2) it[it.size - 2] else null }
+    val isTop = !isMinimized && entry === activeTop
+    val belowTop = !isMinimized && entry === activeBelowTop
+    val slideDriver = nav.stack.lastOrNull { it.exiting } ?: activeTop
+    val topProgress: () -> Float = { slideDriver?.progress?.value ?: 1f }
     // 展开页自己画生长，宿主别再从右边推它。
-    val slide = !isMinimized && top != null && !top.expand
+    val slide = !isMinimized && !entry.expand && (entry === slideDriver || (slideDriver != null && !slideDriver.expand))
     val cornerShape = remember(screenCorner) { SquircleShape(screenCorner) }
 
-    val covered by remember(isMinimized, isTop, belowTop, top) {
+    val covered by remember(isMinimized, index, nav.stack.size) {
         derivedStateOf {
-            isMinimized || (!isTop && (
-                !belowTop || (
-                    topProgress() >= 1f &&
-                        top?.exiting != true &&
-                        top?.previewing != true
-                    )
-                ))
+            isMinimized || (index >= 0 && nav.stack.drop(index + 1).any {
+                !it.exiting && !it.previewing && it.progress.value >= 1f
+            })
         }
     }
 
     val layer = Modifier
         .fillMaxSize()
-        .zIndex(when {
-            isMinimized -> -1f
-            isTop -> 2f
-            else -> 1f
-        })
+        .zIndex(if (isMinimized) -1f else 1f + index * 0.01f)
         .then(
             if (isTop) {
                 // 吃掉空白处的点击，别漏到下面那页；拖动仍然交给可滚动内容。
@@ -442,8 +476,8 @@ private fun RouteLayer(
             }
             if (slide) {
                 translationX = when {
-                    isTop -> (1f - progress()) * widthPx
-                    belowTop -> -topProgress() * widthPx / RouteParallaxDivisor
+                    entry === slideDriver -> (1f - progress()) * widthPx
+                    isTop || belowTop -> -topProgress() * widthPx / RouteParallaxDivisor
                     else -> 0f
                 }
                 // 路径裁剪每帧都要光栅化一张蒙版，只有页面真的在移动时才需要。
@@ -499,10 +533,14 @@ private fun RouteLayer(
         Box(layer.then(freezeLayout)) {
             if (entry.hasExpandOrigin || entry.route.isPlayback() || entry.route is Route.Opus) {
                 ExpandLayer(entry, screenCorner, progress, { entry.fade.value }) {
-                    RouteContent(entry.route, nav, container)
+                    ExitSnapshotHost(exiting = entry.exiting, hasSurfaceView = entry.hasSurfaceView) {
+                        RouteContent(entry.route, nav, container)
+                    }
                 }
             } else {
-                RouteContent(entry.route, nav, container)
+                ExitSnapshotHost(exiting = entry.exiting, hasSurfaceView = entry.hasSurfaceView) {
+                    RouteContent(entry.route, nav, container)
+                }
             }
         }
     }

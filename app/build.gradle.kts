@@ -24,8 +24,8 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 133
-        versionName = "0.2.11-pre.12"
+        versionCode = 134
+        versionName = "0.3.0-pre.13"
         buildConfigField("String", "UPDATE_REPOSITORY", "\"Costben/BiliCO\"")
     }
 
@@ -109,6 +109,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 

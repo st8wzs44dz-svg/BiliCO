@@ -35,6 +35,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import erl.bilico.ui.LocalRouteIsTop
 import erl.bilico.ui.LocalRouteMinimized
+import erl.bilico.ui.Route
 
 val LocalInPipMode = compositionLocalOf { false }
 
@@ -83,6 +84,14 @@ object PlaybackBridge {
     var stopVersion by mutableIntStateOf(0)
         private set
 
+    /**
+     * 带球换到另一条视频时先把音量压到 0，等新页落位再收尾。
+     * 不能用 `volume == 0f` 反推这个状态：SponsorBlock 的静音片段也会把音量压到 0。
+     */
+    @Volatile
+    var mutedForRouteSwitch: Boolean = false
+        private set
+
     fun bind(
         player: Player,
         title: String,
@@ -117,6 +126,10 @@ object PlaybackBridge {
     internal fun detach(player: Player, owner: Any? = null) {
         if (activePlayer !== player) return
         if (owner != null && activeOwner !== owner) return
+        if (mutedForRouteSwitch) {
+            mutedForRouteSwitch = false
+            player.volume = 1f
+        }
         activeOwner = null
         activePlayer = null
         activeTitle = ""
@@ -147,7 +160,51 @@ object PlaybackBridge {
     }
 
     fun pauseAndStopSession(context: Context) {
-        activePlayer?.pause()
+        val p = activePlayer
+        if (mutedForRouteSwitch) {
+            mutedForRouteSwitch = false
+            p?.volume = 1f
+        }
+        p?.pause()
+        currentIsPlaying = false
+        PlaybackService.stop(context)
+    }
+
+    /**
+     * 带球点开另一条视频：这一下发生在手势落点那一帧，`player.stop()` 会连着几条 Binder 堵住主线程，
+     * 所以只把音量瞬间压到 0（纯本地字段，0 次 IPC）。新页落位后由 [consumeRouteSwitchMute] 收尾。
+     */
+    fun muteForRouteSwitch() {
+        activePlayer?.volume = 0f
+        mutedForRouteSwitch = true
+        currentIsPlaying = false
+    }
+
+    /**
+     * 新页开始装载自己的片源之前收尾上一次静音：恢复音量，并告诉调用方旧片源还挂着、
+     * 需要 `stop()` + `clearMediaItems()`（取流失败时也要停，不能静音在后台继续跑）。
+     */
+    fun consumeRouteSwitchMute(player: Player): Boolean {
+        if (!mutedForRouteSwitch) return false
+        mutedForRouteSwitch = false
+        player.volume = 1f
+        return true
+    }
+
+    /**
+     * 从融合球换到另一条视频：旧会话到此为止，但播放器留在原处给新页面接着用。
+     * 清空媒体项后播放器回到 IDLE，新页面不会把一台暂停的旧片源当成自己的接着播。
+     * 同步的 `release()` 会阻塞主线程几百毫秒，这里只做停止与清空。
+     */
+    fun stopForRouteSwitch(context: Context) {
+        activePlayer?.let {
+            if (mutedForRouteSwitch) {
+                mutedForRouteSwitch = false
+                it.volume = 1f
+            }
+            it.stop()
+            it.clearMediaItems()
+        }
         currentIsPlaying = false
         PlaybackService.stop(context)
     }
@@ -307,9 +364,24 @@ fun BindPlaybackSession(
     val routeEntry = erl.bilico.ui.LocalNavEntry.current
     val navState = erl.bilico.ui.LocalNavState.current
     val currentBackgroundPlay = rememberUpdatedState(backgroundPlay)
+    // 出栈时先暂停再播退场动画：暂停会改 isPlaying，若此时照常重绑就会把刚停掉的服务重新拉起、
+    // 重建媒体会话并重载封面，全压在退场那几帧上。缩进融合球不算出栈，会话照常维持。
+    val poppingOut = routeEntry?.exiting == true && !routeEntry.minimizingToOrb
 
-    LaunchedEffect(activeSession, player, title, subtitle, artworkUrl, isPlaying, effectiveAutoPip) {
+    LaunchedEffect(activeSession, player, title, subtitle, artworkUrl, isPlaying, effectiveAutoPip, poppingOut) {
         if (!activeSession) return@LaunchedEffect
+        if (poppingOut) {
+            // 出栈时播放器已经暂停，但退场动画还要跑 240ms，系统这段时间仍按上一次的参数判断
+            // 要不要自动进画中画。这里先把 autoEnter 关掉，免得这时上滑回桌面拉起一个已暂停的画中画窗。
+            if (activity != null && PlaybackBridge.canEnterPip(activity) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                runCatching {
+                    activity.setPictureInPictureParams(
+                        PlaybackBridge.buildPipParams(activity, isPlaying = false, autoEnter = false),
+                    )
+                }
+            }
+            return@LaunchedEffect
+        }
         PlaybackBridge.bind(
             player = player,
             title = title,
@@ -358,6 +430,15 @@ fun BindPlaybackSession(
             // 菜单里的「继续播放」也因为拿不到播放器点不动。收进球里的页面仍在，绑定交给它新的一版。
             val entry = routeEntry
             if (entry != null && (entry.minimizingToOrb || navState?.minimizedEntry === entry)) {
+                return@onDispose
+            }
+            // 从球里那条视频点开另一条：新视频页入栈把这一页撤掉。这一次解绑发生在
+            // Compose:onForgotten 里，`setPictureInPictureParams` 与停服务都是 Binder 往返，
+            // 会堵住进场动画的头几帧；同一台播放器同 bvid 续播时，停服务还会把正在跑的后台播放掐掉。
+            val newTop = navState?.stack?.lastOrNull { !it.exiting }
+            if (entry != null && entry.route is Route.Video &&
+                newTop?.route is Route.Video && newTop !== entry
+            ) {
                 return@onDispose
             }
             // 多层播放页共享同一台 ExoPlayer：只有当前会话真正拥有者被销毁时才解绑并清画中画参数，

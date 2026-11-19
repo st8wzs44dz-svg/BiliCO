@@ -516,9 +516,9 @@ internal fun ReplyDetailPage(
                 },
                 containerColor = pageBg,
                 backdrop = overlayBackdrop,
-                sort = detailState.sort,
+                sort = if (detailState.sort == ReplySort.New) CommentSort.New else CommentSort.Hot,
                 onToggleSort = {
-                    val next = if (detailState.sort == CommentSort.Hot) CommentSort.New else CommentSort.Hot
+                    val next = if (detailState.sort == ReplySort.Hot) ReplySort.New else ReplySort.Hot
                     detailState.selectSort(next)
                     listState.requestScrollToItem(0)
                 },
