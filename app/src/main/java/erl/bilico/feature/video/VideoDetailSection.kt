@@ -277,6 +277,7 @@ internal fun VideoDetailSection(
                     topInset = firstRowHeight,
                     bottomInset = navBarBottom,
                     backEnabled = backEnabled,
+                    threadedReplies = true,
                     onOpenUser = onOpenUser,
                     modifier = Modifier.fillMaxSize(),
                 )

@@ -77,6 +77,8 @@ private const val FOLDED_COMMENT_LINES = 8
 
 private val LocationPrefix = Regex("^IP\\s*属地\\s*[:：]\\s*", RegexOption.IGNORE_CASE)
 private val CommentAvatarGap = 12.dp
+internal val ReplyRootAvatarSize = 38.dp
+internal val ReplyChildAvatarSize = 32.dp
 
 /** 视频主评论使用平铺样式，回复详情和其他入口共用原有评论内容。 */
 @OptIn(ExperimentalFoundationApi::class)
@@ -103,7 +105,7 @@ internal fun BiliCommentItem(
     // 不可折叠时整段正文始终铺满，点击正文也不再翻转展开态。
     val unfolded = !expandable || expanded
     val density = LocalDensity.current
-    val avatarDp = if (isSubReply) 32.dp else 38.dp
+    val avatarDp = if (isSubReply) ReplyChildAvatarSize else ReplyRootAvatarSize
     val avatarPx = with(density) { avatarDp.roundToPx() }
     val openUser = remember(comment.mid, onOpenUser) {
         { if (comment.mid > 0L) onOpenUser(comment.mid) }

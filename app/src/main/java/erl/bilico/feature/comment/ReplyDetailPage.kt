@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -96,6 +97,7 @@ internal fun ReplyDetailOverlay(
     topInset: Dp = 0.dp,
     bottomInset: Dp = navBottomPadding(),
     backEnabled: Boolean = true,
+    threadedReplies: Boolean = false,
     onOpenUser: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -131,6 +133,7 @@ internal fun ReplyDetailOverlay(
             topInset = topInset,
             bottomInset = bottomInset,
             backEnabled = backEnabled && activeRoot != null,
+            threadedReplies = threadedReplies,
             onSubReplyAdded = { created -> controller.onSubReplyAdded?.invoke(root.id, created) },
             onSubReplyDeleted = { replyId -> controller.onSubReplyDeleted?.invoke(root.id, replyId) },
             onRootDeleted = {
@@ -155,6 +158,7 @@ internal fun ReplyDetailPage(
     topInset: Dp = 0.dp,
     bottomInset: Dp = navBottomPadding(),
     backEnabled: Boolean = true,
+    threadedReplies: Boolean = false,
     onSubReplyAdded: (Comment) -> Unit = {},
     onSubReplyDeleted: (Long) -> Unit = {},
     onRootDeleted: () -> Unit = {},
@@ -200,9 +204,17 @@ internal fun ReplyDetailPage(
     val editorFocused by editorInteractionSource.collectIsFocusedAsState()
     var wasEditorFocused by remember { mutableStateOf(false) }
     var focusTick by remember(comment.id) { mutableIntStateOf(0) }
-    var alignRequest by remember(comment.id) { mutableStateOf<Int?>(null) }
+    var alignRequest by remember(comment.id) { mutableStateOf<Long?>(null) }
     var targetReplyHandled by remember(comment.id, initialTargetReplyId) { mutableStateOf(false) }
     var bottomStackPx by remember { mutableIntStateOf(0) }
+    val replyRows = remember(comment.id, threadedReplies, detailState.items) {
+        if (threadedReplies) buildReplyRows(comment.id, detailState.items)
+        else detailState.items.map { ReplyRow(it) }
+    }
+    val replyIndices = remember(replyRows) {
+        replyRows.mapIndexed { index, row -> row.comment.id to (SUB_REPLY_ITEM_OFFSET + index) }.toMap()
+    }
+    val currentReplyIndices by rememberUpdatedState(replyIndices)
 
     val emoteLookup = remember(emotePackages) { buildEmoteLookup(emotePackages) }
 
@@ -258,17 +270,15 @@ internal fun ReplyDetailPage(
         launch { loadEmotes(force = false) }
     }
 
-    LaunchedEffect(initialTargetReplyId, detailState.items.size) {
-        if (targetReplyHandled || initialTargetReplyId <= 0L) return@LaunchedEffect
-        val idx = detailState.items.indexOfFirst { it.id == initialTargetReplyId }
-        if (idx >= 0) {
-            targetReplyHandled = true
-            listState.animateScrollToItem(SUB_REPLY_ITEM_OFFSET + idx)
-        }
+    val initialTargetIndex = replyIndices[initialTargetReplyId]
+    LaunchedEffect(initialTargetReplyId, initialTargetIndex) {
+        if (targetReplyHandled || initialTargetReplyId <= 0L || initialTargetIndex == null) return@LaunchedEffect
+        listState.animateScrollToItem(initialTargetIndex)
+        targetReplyHandled = true
     }
 
     LaunchedEffect(alignRequest) {
-        val index = alignRequest ?: return@LaunchedEffect
+        val replyId = alignRequest ?: return@LaunchedEffect
         var ime = imeInsets.getBottom(density)
         var stableFrames = 0
         while (stableFrames < 3) {
@@ -276,7 +286,8 @@ internal fun ReplyDetailPage(
             val now = imeInsets.getBottom(density)
             if (now == ime) stableFrames++ else { ime = now; stableFrames = 0 }
         }
-        listState.animateScrollToItem(index)
+        val index = if (replyId == comment.id) 0 else currentReplyIndices[replyId]
+        if (index != null) listState.animateScrollToItem(index)
         alignRequest = null
     }
 
@@ -290,11 +301,11 @@ internal fun ReplyDetailPage(
             }
     }
 
-    fun startReply(target: Comment, itemIndex: Int) {
+    fun startReply(target: Comment) {
         replyTarget = target
         emotePanelOpen = false
         focusTick += 1
-        alignRequest = itemIndex
+        alignRequest = target.id
     }
 
     fun insertEmote(token: String) {
@@ -329,6 +340,8 @@ internal fun ReplyDetailPage(
     }
     val isDark = COUITheme.colorScheme.background.luminance() < 0.5f
     val pageBg = pageContainerColor()
+    val listBackground = if (threadedReplies) COUITheme.colorScheme.surfaceContainer else pageBg
+    val threadLineColor = COUITheme.colorScheme.dividerLine
     val parentOpenBvid = LocalOpenBvid.current
     val parentSeek = LocalCommentSeek.current
     val threadUserMids = remember(detailState.rootComment, detailState.items) {
@@ -368,7 +381,7 @@ internal fun ReplyDetailPage(
                 modifier = Modifier
                     .fillMaxSize()
                     .layerBackdropIf(BlurEffectsEnabled, pageBackdrop)
-                    .background(pageBg)
+                    .background(listBackground)
                     .scrollEndHaptic(),
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -378,23 +391,26 @@ internal fun ReplyDetailPage(
                 ),
             ) {
                 item(key = "root_comment") {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                    ReplyRowSurface(
+                        flat = threadedReplies,
+                        modifier = if (threadedReplies && replyRows.isNotEmpty()) {
+                            Modifier.replyRootLine(threadLineColor)
+                        } else Modifier,
                     ) {
                         BiliCommentItem(
                             comment = detailState.rootComment,
                             onLike = detailState::toggleRootLike,
                             onDislike = detailState::toggleRootDislike,
-                            onReply = { startReply(detailState.rootComment, 0) },
+                            onReply = { startReply(detailState.rootComment) },
                             onOpenReplies = null,
                             onOpenUser = onOpenUser,
                             onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
                             isSubReply = false,
-                            expandable = false,
+                            expandable = threadedReplies,
+                            flat = threadedReplies,
                             currentMid = currentMid,
                             onDelete = detailState::deleteRootComment,
-                            onClick = { startReply(detailState.rootComment, 0) },
+                            onClick = { startReply(detailState.rootComment) },
                         )
                     }
                 }
@@ -433,30 +449,35 @@ internal fun ReplyDetailPage(
                         )
                     }
                 } else {
-                    itemsIndexed(detailState.items, key = { _, reply -> reply.id }) { index, reply ->
-                        val itemIndex = SUB_REPLY_ITEM_OFFSET + index
+                    itemsIndexed(replyRows, key = { _, row -> row.comment.id }) { index, row ->
+                        val reply = row.comment
                         val displayReply = remember(reply, threadUserMids) {
                             if (threadUserMids.isEmpty()) reply
                             else reply.copy(mentions = threadUserMids + reply.mentions)
                         }
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp),
-                            insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                        ReplyRowSurface(
+                            flat = threadedReplies,
+                            modifier = if (threadedReplies) {
+                                Modifier.replyBranchLines(row, threadLineColor)
+                                    .padding(start = ReplyIndent * row.depth, top = ReplyRowTopPadding)
+                            } else {
+                                Modifier.padding(top = 10.dp)
+                            },
                         ) {
                             BiliCommentItem(
                                 comment = displayReply,
                                 onLike = { detailState.toggleLike(reply) },
                                 onDislike = { detailState.toggleDislike(reply) },
-                                onReply = { startReply(reply, itemIndex) },
+                                onReply = { startReply(reply) },
                                 onOpenUser = onOpenUser,
                                 onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
                                 isSubReply = true,
-                                expandable = false,
+                                expandable = threadedReplies,
+                                flat = threadedReplies,
+                                showDivider = threadedReplies && index < replyRows.lastIndex,
                                 currentMid = currentMid,
                                 onDelete = { detailState.deleteSubReply(reply) },
-                                onClick = { startReply(reply, itemIndex) },
+                                onClick = { startReply(reply) },
                             )
                         }
                     }
@@ -577,6 +598,22 @@ internal fun ReplyDetailPage(
             initialIndex = index,
             onDismiss = { imageViewer = null },
         )
+    }
+}
+
+@Composable
+private fun ReplyRowSurface(
+    flat: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    if (flat) {
+        Box(Modifier.fillMaxWidth().then(modifier)) { content() }
+    } else {
+        Card(
+            modifier = Modifier.fillMaxWidth().then(modifier),
+            insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+        ) { content() }
     }
 }
 
