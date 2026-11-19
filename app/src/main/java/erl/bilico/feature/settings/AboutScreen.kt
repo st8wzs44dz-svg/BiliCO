@@ -28,6 +28,7 @@ import erl.bilico.ui.Route
 import erl.bilico.ui.components.PreferenceDivider
 import erl.bilico.ui.components.SecondaryPage
 import erl.bilico.ui.components.SectionTitle
+import erl.bilico.update.AppUpdater
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CardDefaults
 import io.github.suqi8.coui.kmp.basic.CardListPosition
@@ -150,11 +151,11 @@ fun AboutScreen(
             ) {
                 ArrowPreference(
                     title = "开源仓库",
-                    summary = "https://github.com/Costben/BiliCO",
+                    summary = AppUpdater.repositoryUrl,
                     statusText = "GitHub",
                     modifier = Modifier.testTag("about_repo"),
                     cardListPosition = CardListPosition.Head,
-                    onClick = { openExternalUrl(context, "https://github.com/Costben/BiliCO") },
+                    onClick = { openExternalUrl(context, AppUpdater.repositoryUrl) },
                 )
                 PreferenceDivider()
                 ArrowPreference(

@@ -37,6 +37,14 @@ Kotlin · Jetpack Compose · COUI
 
 前往 [Releases](https://github.com/Costben/BiliCO/releases) 下载最新 APK 安装即可。应用内「设置 → 检查更新」也支持直接检测新版与预发布版本并完成下载安装。
 
+### 发布个人预览版
+
+个人预览版（`assemblePreview`，包名 `erl.bilico.debug`）通过 [个人仓库的 Releases](https://github.com/astarion1965974/BiliCO/releases) 获取更新。`0.2.11-pre.11` 可手动覆盖安装 `0.2.11-pre.12`，之后可在 App 的「检查更新」中获取新版。
+
+1. 每次发布新 APK 时，递增 `app/build.gradle.kts` 中的 `versionName` 和 `versionCode`。使用匹配 `versionName` 的标签，例如 `v0.2.11-pre.12` 对应 `0.2.11-pre.12`、`versionCode` 133。
+2. 从 [构建工作流](https://github.com/astarion1965974/BiliCO/actions/workflows/build-keep-screen-on-apk.yml) 下载该提交的未签名 APK。在可信环境中，用签署 `pre.11` 的原有密钥和别名签署新 APK。对现有已签名 APK 和新 APK 分别运行 `apksigner verify --print-certs`，确认签名证书的 SHA-256 指纹一致。
+3. 在个人仓库创建对应标签的 GitHub Release，勾选 Pre-release，添加更新日志并附上已签名的 `BiliCO-0.2.11-pre.12.apk`，然后发布。后续版本沿用 `BiliCO-<versionName>.apk` 命名。
+
 ## 🛠️ 本地构建
 
 ### 环境要求

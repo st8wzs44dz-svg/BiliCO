@@ -2,7 +2,11 @@ package erl.bilico.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -10,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import erl.bilico.BuildConfig
 import erl.bilico.data.settings.SettingsRepository
 import kotlinx.coroutines.CancellationException
@@ -41,20 +46,23 @@ const val UpdateCheckInterval = 12 * 60 * 60 * 1000L
 data class UpdateInfo(
     val version: String,
     val notes: String,
-    val apkUrl: String?,
+    val apk: UpdateApk?,
     val pageUrl: String,
     val prerelease: Boolean,
     val publishedAt: String = "",
 )
 
+data class UpdateApk(val id: Long, val url: String)
+
 /**
  * GitHub Releases 更新检查与应用内安装包下载器（对齐 Cobo Updater + c001apk InAppUpdater）：
  * - 支持正式版与预发布版（`-pre` / `-beta` / `prerelease=true`）过滤与语义化版本比较
  * - 多镜像（gh-proxy / ghfast / 直连）并发测速择优 + HTTP Range 4 路分片断点续传
- * - 下载完成后校验 APK 归档包名，通过 FileProvider 调起系统安装器
+ * - 下载完成后校验包名、版本与签名证书，通过 FileProvider 调起系统安装器
  */
 object AppUpdater {
-    private const val REPO = "Costben/BiliCO"
+    private const val REPO = BuildConfig.UPDATE_REPOSITORY
+    const val repositoryUrl = "https://github.com/$REPO"
     private const val API = "https://api.github.com/repos/$REPO/releases?per_page=20"
 
     private val MIRRORS = listOf(
@@ -90,11 +98,10 @@ object AppUpdater {
     suspend fun latest(
         currentVersion: String,
         includePrerelease: Boolean,
-    ): UpdateInfo? = withContext(Dispatchers.IO) {
-        val current = currentVersion.removePrefix("v").removePrefix("V")
-        val best = releases(includePrerelease).firstOrNull() ?: return@withContext null
-        if (compareVersion(best.version, current) > 0) best else null
-    }
+    ): UpdateInfo? = findUpdate(releases(includePrerelease), currentVersion)
+
+    fun findUpdate(releases: List<UpdateInfo>, currentVersion: String): UpdateInfo? =
+        releases.firstOrNull { it.apk != null && compareVersion(it.version, currentVersion) > 0 }
 
     suspend fun releases(includePrerelease: Boolean): List<UpdateInfo> = withContext(Dispatchers.IO) {
         val req = Request.Builder()
@@ -106,6 +113,10 @@ object AppUpdater {
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             resp.body.string()
         }
+        parseReleases(body, includePrerelease)
+    }
+
+    internal fun parseReleases(body: String, includePrerelease: Boolean): List<UpdateInfo> {
         val arr = JSONArray(body)
         val candidates = ArrayList<UpdateInfo>(arr.length())
         for (i in 0 until arr.length()) {
@@ -116,92 +127,126 @@ object AppUpdater {
             if (version.isEmpty()) continue
             val prerelease = item.optBoolean("prerelease", false) || version.contains('-')
             if (prerelease && !includePrerelease) continue
-            val assets = item.optJSONArray("assets")
-            var apkUrl: String? = null
-            if (assets != null) {
-                for (j in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(j) ?: continue
-                    val name = asset.optString("name")
-                    val url = asset.optString("browser_download_url")
-                    if (name.endsWith(".apk", ignoreCase = true) && url.isNotEmpty()) {
-                        apkUrl = url
-                        break
-                    }
-                }
-            }
+            val apk = selectApk(item.optJSONArray("assets"), version)
             val pageUrl = item.optString("html_url").ifEmpty {
-                "https://github.com/$REPO/releases"
+                "$repositoryUrl/releases"
             }
             candidates += UpdateInfo(
                 version = version,
                 notes = item.optString("body").trim(),
-                apkUrl = apkUrl,
+                apk = apk,
                 pageUrl = pageUrl,
                 prerelease = prerelease,
                 publishedAt = item.optString("published_at").trim(),
             )
         }
-        candidates.sortedWith { a, b -> compareVersion(b.version, a.version) }
+        return candidates.sortedWith { a, b -> compareVersion(b.version, a.version) }
+    }
+
+    private fun selectApk(assets: JSONArray?, version: String): UpdateApk? {
+        if (assets == null) return null
+        val preferredName = "BiliCO-$version.apk"
+        val candidates = buildList {
+            for (index in 0 until assets.length()) {
+                val asset = assets.optJSONObject(index) ?: continue
+                val name = asset.optString("name")
+                val id = asset.optLong("id")
+                val url = asset.optString("browser_download_url")
+                if (asset.optString("state") != "uploaded" || id <= 0 ||
+                    !name.endsWith(".apk", ignoreCase = true) ||
+                    name.contains("unsigned", ignoreCase = true) ||
+                    !url.startsWith("$repositoryUrl/releases/download/")
+                ) continue
+                val apk = UpdateApk(id, url)
+                if (name == preferredName) return apk
+                add(apk)
+            }
+        }
+        return candidates.singleOrNull()
     }
 
     suspend fun downloadApk(
         context: Context,
-        url: String,
-        version: String,
+        info: UpdateInfo,
         force: Boolean = false,
         onProgress: (progress: Float, downloadedBytes: Long, totalBytes: Long) -> Unit,
     ): File = withContext(Dispatchers.IO) {
+        val apk = info.apk ?: throw IOException("此版本没有可下载的安装包")
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        val safeVersion = version.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        val target = File(dir, "BiliCO-$safeVersion.apk")
+        val safeVersion = info.version.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val target = File(dir, "BiliCO-$safeVersion-${apk.id}.apk")
 
         dir.listFiles()?.forEach { file ->
-            if (!file.name.startsWith("BiliCO-$safeVersion.apk")) {
-                file.delete()
-            } else if (force) {
+            if (force || (file.name != target.name && !file.name.startsWith("${target.name}."))) {
                 file.delete()
             }
         }
-        if (!force && target.exists() && target.length() > 1_000_000L && isValidApk(context, target)) {
-            val len = target.length()
-            onProgress(1f, len, len)
-            return@withContext target
+        if (target.exists()) {
+            try {
+                verifyApkOrThrow(context, target, info.version)
+                val len = target.length()
+                onProgress(1f, len, len)
+                return@withContext target
+            } catch (_: IOException) {
+                target.delete()
+            }
         }
 
-        val candidates = raceMirrors(url)
+        val candidates = raceMirrors(apk.url)
         var lastError: Throwable? = null
         for (candidate in candidates) {
             coroutineContext.ensureActive()
             try {
                 downloadFromCandidate(candidate, target, onProgress)
-                verifyApkOrThrow(context, target)
+                verifyApkOrThrow(context, target, info.version)
                 return@withContext target
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Throwable) {
+                target.delete()
                 lastError = t
             }
         }
         throw lastError ?: IOException("下载更新包失败")
     }
 
-    private fun isValidApk(context: Context, file: File): Boolean = runCatching {
-        val info = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
-        info != null && info.packageName == context.packageName
-    }.getOrDefault(false)
-
-    private fun verifyApkOrThrow(context: Context, file: File) {
-        val archive = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
-        if (archive == null) {
-            file.delete()
-            throw IOException("安装包已损坏或下载不完整")
+    @Suppress("DEPRECATION")
+    private fun verifyApkOrThrow(context: Context, file: File, version: String) {
+        val pm = context.packageManager
+        val signingFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            PackageManager.GET_SIGNATURES
         }
+        val archive = pm.getPackageArchiveInfo(file.absolutePath, signingFlags)
+            ?: throw IOException("安装包已损坏、未签名或下载不完整")
         if (archive.packageName != context.packageName) {
-            file.delete()
-            throw IOException("安装包签名或包名不匹配 (${archive.packageName})")
+            throw IOException("APK 包名与当前应用不一致 (${archive.packageName})")
+        }
+        val installed = pm.getPackageInfo(context.packageName, signingFlags)
+        val signers = archive.currentSigners()
+        if (signers.isEmpty() || signers != installed.currentSigners()) {
+            throw IOException("安装包签名证书与当前已安装版本不一致")
+        }
+        if (archive.versionName?.removePrefix("v")?.removePrefix("V") != version) {
+            throw IOException("安装包版本与发布标签不一致")
+        }
+        val archiveCode = PackageInfoCompat.getLongVersionCode(archive)
+        val installedCode = PackageInfoCompat.getLongVersionCode(installed)
+        if (archiveCode < installedCode ||
+            (archiveCode == installedCode && compareVersion(version, installed.versionName.orEmpty()) > 0)
+        ) {
+            throw IOException("新版安装包的版本号必须高于当前已安装版本")
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun PackageInfo.currentSigners(): Set<Signature> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            signingInfo?.apkContentsSigners?.toSet().orEmpty()
+        } else {
+            signatures?.toSet().orEmpty()
+        }
     private suspend fun raceMirrors(url: String): List<String> = coroutineScope {
         val all = MIRRORS.map { prefix -> if (prefix.isEmpty()) url else prefix + url }
         val jobs = all.map { candidate ->
@@ -429,7 +474,7 @@ object AppUpdater {
     }
 
     fun openDownload(context: Context, info: UpdateInfo) {
-        val target = info.apkUrl ?: info.pageUrl
+        val target = info.apk?.url ?: info.pageUrl
         runCatching {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -453,7 +498,7 @@ object AppUpdater {
 
     /**
      * 先比主版本数字段；数字一样时正式版高于预发布版（`0.1.2 > 0.1.2-pre`），
-     * 两个预发布版之间按后缀字典序比较。
+     * 点分隔的预发布标识按语义化版本规则比较，例如 pre.12 高于 pre.9。
      */
     fun compareVersion(a: String, b: String): Int {
         val (aCore, aPre) = splitPre(a)
@@ -469,12 +514,27 @@ object AppUpdater {
         if (aPre.isEmpty() && bPre.isEmpty()) return 0
         if (aPre.isEmpty()) return 1
         if (bPre.isEmpty()) return -1
-        return aPre.compareTo(bPre)
+        val aIdentifiers = aPre.split('.')
+        val bIdentifiers = bPre.split('.')
+        for (i in 0 until minOf(aIdentifiers.size, bIdentifiers.size)) {
+            val left = aIdentifiers[i]
+            val right = bIdentifiers[i]
+            val leftNumber = left.toLongOrNull()
+            val rightNumber = right.toLongOrNull()
+            val order = when {
+                leftNumber != null && rightNumber != null -> leftNumber.compareTo(rightNumber)
+                leftNumber != null -> -1
+                rightNumber != null -> 1
+                else -> left.compareTo(right)
+            }
+            if (order != 0) return order
+        }
+        return aIdentifiers.size.compareTo(bIdentifiers.size)
     }
 
     private fun splitPre(v: String): Pair<String, String> {
-        val idx = v.indexOf('-')
-        return if (idx < 0) v to "" else v.substring(0, idx) to v.substring(idx + 1)
+        val version = v.removePrefix("v").removePrefix("V").substringBefore('+')
+        return version.substringBefore('-') to version.substringAfter('-', "")
     }
 }
 

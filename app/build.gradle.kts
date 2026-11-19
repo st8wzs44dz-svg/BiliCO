@@ -24,8 +24,9 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 132
-        versionName = "0.2.11-pre.11"
+        versionCode = 133
+        versionName = "0.2.11-pre.12"
+        buildConfigField("String", "UPDATE_REPOSITORY", "\"Costben/BiliCO\"")
     }
 
     signingConfigs {
@@ -62,6 +63,7 @@ android {
         create("preview") {
             initWith(getByName("release"))
             applicationIdSuffix = ".debug"
+            buildConfigField("String", "UPDATE_REPOSITORY", "\"astarion1965974/BiliCO\"")
             isShrinkResources = false
             matchingFallbacks += "release"
             signingConfig = null

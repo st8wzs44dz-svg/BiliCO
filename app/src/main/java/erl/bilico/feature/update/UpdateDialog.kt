@@ -82,7 +82,7 @@ fun UpdateDialog(
     var skip by remember { mutableStateOf(false) }
     var settled by remember { mutableStateOf(false) }
 
-    val inApp = inAppSetting && !info.apkUrl.isNullOrBlank()
+    val inApp = inAppSetting && info.apk != null
     var downloading by remember { mutableStateOf(false) }
     var readyFile by remember { mutableStateOf<File?>(null) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -96,7 +96,6 @@ fun UpdateDialog(
     val scrollState = rememberScrollState()
 
     fun startInAppDownload() {
-        val apkUrl = info.apkUrl ?: return
         downloading = true
         readyFile = null
         downloadError = null
@@ -109,8 +108,7 @@ fun UpdateDialog(
             try {
                 val file = AppUpdater.downloadApk(
                     context = context,
-                    url = apkUrl,
-                    version = info.version,
+                    info = info,
                     force = preview,
                     onProgress = { p, current, total ->
                         val now = System.currentTimeMillis()
@@ -344,7 +342,11 @@ fun UpdateDialog(
                             onClick = { show = false },
                         ),
                         positive = DialogButtonBarAction(
-                            text = if (inApp) "立即更新" else "浏览器下载",
+                            text = when {
+                                inApp -> "立即更新"
+                                info.apk != null -> "浏览器下载"
+                                else -> "查看发布页"
+                            },
                             recommended = true,
                             onClick = {
                                 if (inApp) {

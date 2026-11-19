@@ -88,9 +88,7 @@ fun UpdateScreen(
             }
     }
 
-    val latestRelease = releases?.firstOrNull()
-    val hasNewerRelease = latestRelease != null &&
-        AppUpdater.compareVersion(latestRelease.version, current) > 0
+    val latestRelease = releases?.let { AppUpdater.findUpdate(it, current) }
 
     SecondaryPage(
         title = "检查更新",
@@ -125,14 +123,14 @@ fun UpdateScreen(
                         Spacer(Modifier.height(4.dp))
                         val statusLine = when {
                             container.updater.checkingUpdate -> "正在连接 GitHub 检查最新版本…"
-                            hasNewerRelease -> "发现新版本 v${latestRelease.version}"
+                            latestRelease != null -> "发现新版本 v${latestRelease.version}"
                             releases != null -> "当前已是最新版本"
                             else -> "点击右侧按钮检查最新版本"
                         }
                         Text(
                             text = statusLine,
                             fontSize = 13.sp,
-                            color = if (hasNewerRelease) {
+                            color = if (latestRelease != null) {
                                 COUITheme.colorScheme.primary
                             } else {
                                 COUITheme.colorScheme.onSurfaceSecondary
