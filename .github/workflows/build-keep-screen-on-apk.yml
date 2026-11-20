@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  COUI_REF: 14d1258b2076f9d9d5f5b47a8a4b71dcb5a6249a
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,10 +20,18 @@ jobs:
         with:
           path: BiliCO
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - name: Cache COUI 17 local repo
+        id: coui-cache
+        uses: actions/cache@v4
+        with:
+          path: coui/build/repository/local
+          key: coui17-local-repo-${{ env.COUI_REF }}-v1
+      - name: Checkout COUI 17
+        if: steps.coui-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
         with:
           repository: Costben/coui17
-          ref: 14d1258b2076f9d9d5f5b47a8a4b71dcb5a6249a
+          ref: ${{ env.COUI_REF }}
           persist-credentials: false
           path: coui
       - uses: actions/setup-java@v4
@@ -29,6 +40,7 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Publish COUI 17 artifacts to local repo
+        if: steps.coui-cache.outputs.cache-hit != 'true'
         working-directory: coui
         run: |
           ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository :coui-nav:publishAndroidPublicationToLocalRepository :coui-nav:publishKotlinMultiplatformPublicationToLocalRepository :coui-navigation3-ui:publishAndroidPublicationToLocalRepository :coui-navigation3-ui:publishKotlinMultiplatformPublicationToLocalRepository
