@@ -4,12 +4,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +41,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -86,11 +89,17 @@ import io.github.suqi8.coui.kmp.basic.rememberSearchResultsTransitionState
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /** 底栏切页的交叉淡入时长。 */
 private const val MainTabFadeMillis = 220
+
+/** 顶栏分段胶囊点击切页与番剧深浅色外壳过渡的同步时长。 */
+internal const val SegmentSwitchMillis = 360
 
 /** 搜索整屏面板淡入淡出时长（与 Cobo COUI `SearchPanelFadeMillis` 一致）。 */
 private const val SearchPanelFadeMillis = 220
@@ -252,10 +261,70 @@ fun MainShell(nav: NavState, container: AppContainer) {
         animationSpec = tween(MainTabFadeMillis),
         label = "bangumiTabWeight",
     )
-    // 仅在 placement / graphicsLayer 阶段读取连续进度，横滑与切 Tab 全程纯 GPU alpha 混合、零重组。
+    val shellScope = rememberCoroutineScope()
+    var segmentTapDriven by remember { mutableStateOf(false) }
+    var segmentTapCurrent by remember { mutableFloatStateOf(if (segment == 2) 1f else 0f) }
+    val segmentTapProgress = remember { Animatable(if (segment == 2) 1f else 0f) }
+    var segmentTapJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(feedPager) {
+        feedPager.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) {
+                segmentTapJob?.cancel()
+                segmentTapJob = null
+                segmentTapDriven = false
+            }
+        }
+    }
+
+    // 滑动/惯性阶段直接由 visiblePagesInfo 的真实像素位移还原连续页位置，
+    // 规避 PagerState 在 animateScrollToPage / 惯性松手瞬间先把 currentPage 跳到目标页并把 offsetFraction 夹在 ±0.5 导致的硬切；
+    // 点击顶栏分段胶囊（尤其跨页 0 <-> 2）则由独立的 segmentTapProgress 全程平滑过渡。
+    val pagerBangumiProgress: () -> Float = {
+        val layoutInfo = feedPager.layoutInfo
+        val pageSize = layoutInfo.pageSize
+        val firstVisible = layoutInfo.visiblePagesInfo.firstOrNull()
+        val pagePos = if (pageSize > 0 && firstVisible != null) {
+            firstVisible.index - firstVisible.offset.toFloat() / pageSize.toFloat()
+        } else {
+            feedPager.currentPage + feedPager.currentPageOffsetFraction
+        }
+        (1f - abs(pagePos - 2f)).coerceIn(0f, 1f)
+    }
+    val rawBangumiProgress: () -> Float = {
+        if (segmentTapDriven) segmentTapCurrent else pagerBangumiProgress()
+    }
     val bangumiProgress: () -> Float = {
-        val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
-        (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) * tabBangumiWeight.value
+        rawBangumiProgress() * tabBangumiWeight.value
+    }
+    val onCapsuleSegment: (Int) -> Unit = { target ->
+        if (target != segment || segmentTapDriven) {
+            val startProgress = rawBangumiProgress()
+            val targetProgress = if (target == 2) 1f else 0f
+            segmentTapJob?.cancel()
+            segmentTapCurrent = startProgress
+            segmentTapDriven = true
+            segment = target
+            segmentTapJob = shellScope.launch {
+                segmentTapProgress.snapTo(startProgress)
+                if (abs(targetProgress - startProgress) > 0.001f) {
+                    segmentTapProgress.animateTo(
+                        targetValue = targetProgress,
+                        animationSpec = tween(
+                            durationMillis = SegmentSwitchMillis,
+                            easing = FastOutSlowInEasing,
+                        ),
+                    ) {
+                        segmentTapCurrent = value
+                    }
+                } else {
+                    segmentTapCurrent = targetProgress
+                }
+                snapshotFlow { !feedPager.isScrollInProgress && feedPager.settledPage == target }
+                    .first { it }
+                segmentTapDriven = false
+            }
+        }
     }
     val baseChromeVisible = remember(feedPager, userIsDark) {
         derivedStateOf { userIsDark || bangumiProgress() < 0.999f }
@@ -263,12 +332,12 @@ fun MainShell(nav: NavState, container: AppContainer) {
     val darkChromeVisible = remember(feedPager, userIsDark) {
         derivedStateOf { !userIsDark && bangumiProgress() > 0.001f }
     }
-    // 状态栏图标反色等滑动停稳后再同步，避免拖动最敏感帧触发 SystemUI Binder IPC 与全局重组。
+    // 状态栏图标反色等滑动与胶囊点击过渡停稳后再同步，避免动画最敏感帧触发 SystemUI Binder IPC 与全局重组。
     LaunchedEffect(nav, feedPager, tab, feedPanelCovering) {
         snapshotFlow {
             when {
                 tab != FEED_TAB_INDEX || feedPanelCovering -> false
-                feedPager.isScrollInProgress -> null
+                feedPager.isScrollInProgress || segmentTapDriven -> null
                 else -> feedPager.settledPage == 2
             }
         }
@@ -283,8 +352,8 @@ fun MainShell(nav: NavState, container: AppContainer) {
 
     val baseChromeAlpha: () -> Float = { if (userIsDark) 1f else (1f - bangumiProgress()) }
     val darkChromeAlpha: () -> Float = bangumiProgress
-    // 顶栏/底栏边界与融合球落点仅在分页停稳后切换上报方，拖动全程不触发 MainShell 重组。
-    val settledBangumi = !userIsDark && tab == FEED_TAB_INDEX && segment == 2 && !feedPanelCovering
+    // 顶栏/底栏边界与融合球落点仅在分页停稳后切换上报方，拖动与胶囊过渡全程不触发 MainShell 重组。
+    val settledBangumi = !userIsDark && tab == FEED_TAB_INDEX && segment == 2 && !segmentTapDriven && !feedPanelCovering
     val baseReportsBounds = !settledBangumi
     val darkReportsBounds = settledBangumi
 
@@ -358,8 +427,8 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         MainBarUnderlay(
                             tab = tab,
                             collapsed = collapsed,
-                            feedPager = feedPager,
-                            onSegment = { segment = it },
+                            feedSelectedSegment = if (segmentTapDriven) segment else feedPager.targetPage,
+                            onSegment = onCapsuleSegment,
                             dynamicPager = dynamicPager,
                             onDynamicFilter = { dynamicFilterIndex = it },
                             onFeedReselect = { feedRefreshTick++ },
@@ -584,7 +653,7 @@ private fun Modifier.chromeLayerVisibility(
 private fun MainBarUnderlay(
     tab: Int,
     collapsed: () -> Float,
-    feedPager: PagerState,
+    feedSelectedSegment: Int,
     onSegment: (Int) -> Unit,
     dynamicPager: PagerState,
     onDynamicFilter: (Int) -> Unit,
@@ -650,8 +719,8 @@ private fun MainBarUnderlay(
                         val barDensity = LocalDensity.current.density
                         val pageDensity = LocalContext.current.resources.displayMetrics.density
                         // 高光块跟着翻页的落点走：拖动越过翻页阈值、或者松手后的惯性还没停，
-                        // 它就开始滑，不等停稳后回写选中态。点标签时 pager 的动画目标也会立刻更新。
-                        val selectedTabIndex = if (tab == 0) feedPager.targetPage else dynamicPager.targetPage
+                        // 它就开始滑，不等停稳后回写选中态。点标签时浅/深两套胶囊同步切到目标段。
+                        val selectedTabIndex = if (tab == 0) feedSelectedSegment else dynamicPager.targetPage
                         TabRowWithContour(
                             tabs = capsuleLabels,
                             selectedTabIndex = selectedTabIndex.coerceIn(0, capsuleLabels.lastIndex),

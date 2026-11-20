@@ -119,6 +119,7 @@ internal fun VideoFullscreenStage(
      * 都作用不到它。这类播放器不做自绘转场：转场期间保持槽位尺寸，等窗口真转过去再铺满。
      */
     surfaceViewPlayer: Boolean = false,
+    detailBackground: Color? = null,
 ) {
     val windowLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val currentWindowLandscape by rememberUpdatedState(windowLandscape)
@@ -249,7 +250,7 @@ internal fun VideoFullscreenStage(
     }
 
     val inStage by remember { derivedStateOf { fullscreen || progress.value > 0.0005f } }
-    val pageSurface = pageContainerColor()
+    val pageSurface = detailBackground ?: pageContainerColor()
     val statusBarPx = rememberStableStatusBarHeightPx()
     // 横屏窗口里详情页仍按竖屏尺寸测量，退出全屏时不用重排，滚动位置也不会跳。
     var portraitWidth by remember { mutableIntStateOf(0) }

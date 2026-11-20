@@ -1,5 +1,7 @@
 package erl.bilico.feature.feed
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -23,10 +25,12 @@ import erl.bilico.feature.live.LiveListScreen
 import erl.bilico.feature.pgc.BangumiRankSection
 import erl.bilico.feature.rank.RankingSection
 import erl.bilico.ui.NavState
+import erl.bilico.ui.SegmentSwitchMillis
 import io.github.suqi8.coui.kmp.basic.FullPagePullToRefreshState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * 推荐 tab 的四段：推荐流、排行榜、番剧、直播。左右滑动翻页，胶囊点击也一样翻。
@@ -55,7 +59,12 @@ fun FeedScreen(
     // 点胶囊翻页；滑完一页再把选中态写回去。
     // 回写必须等翻页停稳：动画途中 currentPage 会先经过中间那页，写回去会把动画打断在半路。
     LaunchedEffect(segment) {
-        if (pagerState.settledPage != segment) pagerState.animateScrollToPage(segment)
+        if (pagerState.currentPage != segment || abs(pagerState.currentPageOffsetFraction) > 0.0005f) {
+            pagerState.animateScrollToPage(
+                page = segment,
+                animationSpec = tween(durationMillis = SegmentSwitchMillis, easing = FastOutSlowInEasing),
+            )
+        }
     }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }

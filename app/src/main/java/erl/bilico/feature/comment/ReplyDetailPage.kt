@@ -99,6 +99,7 @@ internal fun ReplyDetailOverlay(
     bottomInset: Dp = navBottomPadding(),
     backEnabled: Boolean = true,
     threadedReplies: Boolean = false,
+    containerColor: Color? = null,
     onOpenUser: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -135,6 +136,7 @@ internal fun ReplyDetailOverlay(
             bottomInset = bottomInset,
             backEnabled = backEnabled && activeRoot != null,
             threadedReplies = threadedReplies,
+            containerColor = containerColor,
             onSubReplyAdded = { created -> controller.onSubReplyAdded?.invoke(root.id, created) },
             onSubReplyDeleted = { replyId -> controller.onSubReplyDeleted?.invoke(root.id, replyId) },
             onRootDeleted = {
@@ -160,6 +162,7 @@ internal fun ReplyDetailPage(
     bottomInset: Dp = navBottomPadding(),
     backEnabled: Boolean = true,
     threadedReplies: Boolean = false,
+    containerColor: Color? = null,
     onSubReplyAdded: (Comment) -> Unit = {},
     onSubReplyDeleted: (Long) -> Unit = {},
     onRootDeleted: () -> Unit = {},
@@ -340,8 +343,8 @@ internal fun ReplyDetailPage(
         if (measured > 0.dp) measured + 8.dp else 84.dp + navBottom
     }
     val isDark = COUITheme.colorScheme.background.luminance() < 0.5f
-    val pageBg = pageContainerColor()
-    val listBackground = if (threadedReplies) COUITheme.colorScheme.surfaceContainer else pageBg
+    val pageBg = containerColor ?: pageContainerColor()
+    val listBackground = if (threadedReplies) (containerColor ?: COUITheme.colorScheme.surfaceContainer) else pageBg
     val threadLineColor = COUITheme.colorScheme.dividerLine
     val avatarSize = density.flatCommentAvatarSize()
     val replyIndent = maxOf(24.dp, avatarSize / 2f + 9.dp)

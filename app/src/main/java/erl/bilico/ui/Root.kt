@@ -566,7 +566,9 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         Route.Following -> FollowingScreen(container, nav)
         Route.Settings -> SettingsScreen(container, nav)
         Route.About -> AboutScreen(container, nav)
-        is Route.Pgc -> PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000)
+        is Route.Pgc -> BiliCoTheme(darkMode = 2) {
+            PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000)
+        }
         Route.Messages -> MessageScreen(container, nav)
         Route.BangumiFollow -> BiliCoTheme(darkMode = 2) {
             BangumiFollowScreen(container, nav)
@@ -606,7 +608,9 @@ private fun RootStatusBarSync(
 ) {
     val topEntry = nav.stack.lastOrNull { !it.exiting }
     val topRoute = topEntry?.route
-    val pageForceDark = (topRoute == Route.Main && nav.mainForceDark) || topRoute == Route.BangumiFollow
+    val pageForceDark = (topRoute == Route.Main && nav.mainForceDark) ||
+        topRoute == Route.BangumiFollow ||
+        topRoute is Route.Pgc
     val effectiveDark = dark || pageForceDark
     val wantLightStatusBars = !effectiveDark &&
         !viewerActive &&

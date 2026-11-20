@@ -98,6 +98,7 @@ fun CommentTab(
     replyThreadController: ReplyThreadController? = null,
     toolbarViewModel: CommentViewModel? = null,
     sortInToolbar: Boolean = false,
+    panelColor: Color? = null,
 ) {
     val viewModel = toolbarViewModel ?: rememberCommentViewModel(container, oid, type, targetRootId, targetReplyId)
     val headerItems = if (sortInToolbar) 0 else 1
@@ -156,7 +157,7 @@ fun CommentTab(
                 .fillMaxWidth(),
         ) {
             if (flat) {
-                val color = COUITheme.colorScheme.surfaceContainer
+                val color = panelColor ?: COUITheme.colorScheme.surfaceContainer
                 val shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                 val fadeHeight = topInset.coerceIn(0.dp, 24.dp)
                 val panel = Modifier.matchParentSize().padding(top = topInset - fadeHeight)
