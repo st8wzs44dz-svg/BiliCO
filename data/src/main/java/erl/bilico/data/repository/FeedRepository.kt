@@ -2,18 +2,28 @@ package erl.bilico.data.repository
 
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.model.RecommendItem
+import erl.bilico.data.network.AppSignUtils
 import erl.bilico.data.network.BiliApi
 import erl.bilico.data.network.BuvidManager
 import erl.bilico.data.network.WbiKeyManager
 import erl.bilico.data.network.WbiUtils
+import erl.bilico.data.session.SessionRepository
 import erl.bilico.data.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** 推荐流「不感兴趣」反馈类型，参考 PiliPlus 复刻 App 端反馈与点踩接口。 */
+enum class FeedDislikeAction {
+    NOT_INTERESTED,
+    BLOCK_UP,
+    DISLIKE_VIDEO,
+}
 
 class FeedRepository(
     private val api: BiliApi,
     private val wbi: WbiKeyManager,
     private val buvid: BuvidManager,
+    private val session: SessionRepository,
 ) {
     /**
      * 首页推荐：`fresh_idx` 既是页号也是去重种子，翻页时递增。
@@ -41,6 +51,73 @@ class FeedRepository(
                 .filter { it.goto == "av" || it.goto.isNullOrBlank() }
                 .mapNotNull { it.toFeedVideo() }
         }
+    }
+
+    /**
+     * 推荐流不感兴趣 / 不想看该 UP 主 / 点踩：
+     * 使用当前登录 Cookie 静默换取的 App `access_key` + `ANDROID_HD` 签名上报。
+     */
+    suspend fun dislike(
+        video: FeedVideo,
+        action: FeedDislikeAction,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(video.aid > 0L) { "无效的稿件 ID" }
+            var token = session.ensureAccessToken()
+                ?: error("获取 App 凭证失败，请重新登录")
+            var response = executeDislike(video, action, token)
+            if (response.code == -101) {
+                token = session.ensureAccessToken(forceRefresh = true)
+                    ?: error("登录凭证已失效，请重新登录")
+                response = executeDislike(video, action, token)
+            }
+            if (response.code != 0) {
+                error(response.message.ifBlank { "反馈失败(${response.code})" })
+            }
+        }
+    }
+
+    private suspend fun executeDislike(
+        video: FeedVideo,
+        action: FeedDislikeAction,
+        accessKey: String,
+    ) = when (action) {
+        FeedDislikeAction.NOT_INTERESTED -> api.feedDislike(
+            AppSignUtils.signForAndroidHdApi(
+                mapOf(
+                    "access_key" to accessKey,
+                    "goto" to "av",
+                    "id" to video.aid.toString(),
+                    "reason_id" to "1",
+                    "build" to "1",
+                    "mobi_app" to "android",
+                ),
+            ),
+        )
+
+        FeedDislikeAction.BLOCK_UP -> api.feedDislike(
+            AppSignUtils.signForAndroidHdApi(
+                buildMap {
+                    put("access_key", accessKey)
+                    put("goto", "av")
+                    put("id", video.aid.toString())
+                    put("reason_id", "4")
+                    if (video.upMid > 0L) put("mid", video.upMid.toString())
+                    put("build", "1")
+                    put("mobi_app", "android")
+                },
+            ),
+        )
+
+        FeedDislikeAction.DISLIKE_VIDEO -> api.viewDislike(
+            AppSignUtils.signForAndroidHdApi(
+                mapOf(
+                    "access_key" to accessKey,
+                    "aid" to video.aid.toString(),
+                    "dislike" to "0",
+                ),
+            ),
+        )
     }
 
     private fun RecommendItem.toFeedVideo(): FeedVideo? {

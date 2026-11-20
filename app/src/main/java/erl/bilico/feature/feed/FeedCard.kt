@@ -71,6 +71,7 @@ internal fun FeedCard(
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
     onWatchLater: () -> Unit,
+    onNotInterested: (() -> Unit)? = null,
     generateBackground: Boolean = true,
     onCoverSettled: () -> Unit = {},
 ) {
@@ -101,6 +102,13 @@ internal fun FeedCard(
         Color.White.copy(alpha = 0.7f)
     } else {
         scheme.onSurfaceSecondary
+    }
+    val menuItems = buildList {
+        add(CouiMenuItem("稍后再看", onWatchLater))
+        if (onNotInterested != null) {
+            add(CouiMenuItem("不感兴趣", onNotInterested))
+        }
+        add(CouiMenuItem("分享", { shareVideo(context, video) }))
     }
 
     Box(modifier) {
@@ -209,6 +217,7 @@ internal fun FeedCard(
                             MoreMenu(
                                 tint = secondaryTextColor,
                                 onWatchLater = onWatchLater,
+                                onNotInterested = onNotInterested,
                                 onShare = { shareVideo(context, video) },
                             )
                         }
@@ -220,20 +229,18 @@ internal fun FeedCard(
         CouiPopupMenu(
             show = menuExpanded,
             onDismiss = { menuExpanded = false },
-            items = listOf(
-                CouiMenuItem("稍后再看", onWatchLater),
-                CouiMenuItem("分享", { shareVideo(context, video) }),
-            ),
+            items = menuItems,
             preciseClickState = pressState,
         )
     }
 }
 
-/** 卡片右下角的三个点：COUI 的玻璃弹层菜单，稍后再看与分享。与 UP 主头像同高。 */
+/** 卡片右下角的三个点：COUI 的玻璃弹层菜单，稍后再看、不感兴趣与分享。与 UP 主头像同高。 */
 @Composable
 internal fun MoreMenu(
     onWatchLater: () -> Unit,
     onShare: () -> Unit,
+    onNotInterested: (() -> Unit)? = null,
     tint: Color = COUITheme.colorScheme.onSurfaceSecondary,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -262,10 +269,13 @@ internal fun MoreMenu(
         CouiPopupMenu(
             show = expanded,
             onDismiss = { expanded = false },
-            items = listOf(
-                CouiMenuItem("稍后再看", onWatchLater),
-                CouiMenuItem("分享", onShare),
-            ),
+            items = buildList {
+                add(CouiMenuItem("稍后再看", onWatchLater))
+                if (onNotInterested != null) {
+                    add(CouiMenuItem("不感兴趣", onNotInterested))
+                }
+                add(CouiMenuItem("分享", onShare))
+            },
         )
     }
 }

@@ -310,12 +310,14 @@ internal fun BiliCoRoot(
         val topEntry = nav.stack.lastOrNull { !it.exiting }
         val topRoute = topEntry?.route
         val inPipMode = LocalInPipMode.current
-        val wantLightStatusBars = !dark &&
+        val pageForceDark = (topRoute == Route.Main && nav.mainForceDark) || topRoute == Route.BangumiFollow
+        val effectiveDark = dark || pageForceDark
+        val wantLightStatusBars = !effectiveDark &&
             viewerHost.active == null &&
             (topEntry == null || !topEntry.route.isPlayback() || inPipMode || topEntry.collapsedBarVisible)
         SyncStatusBarAppearance(
             lightStatusBars = wantLightStatusBars,
-            dark = dark,
+            dark = effectiveDark,
             orientation = configuration.orientation,
             syncTick = nav.statusBarSyncTick,
         )
@@ -570,7 +572,9 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         Route.About -> AboutScreen(container, nav)
         is Route.Pgc -> PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000)
         Route.Messages -> MessageScreen(container, nav)
-        Route.BangumiFollow -> BangumiFollowScreen(container, nav)
+        Route.BangumiFollow -> BiliCoTheme(darkMode = 2) {
+            BangumiFollowScreen(container, nav)
+        }
         Route.Login -> LoginScreen(container, nav)
         Route.WebLogin -> WebLoginScreen(container, nav)
         is Route.EmoteManager -> EmoteManagerScreen(container, nav, route.url)

@@ -513,17 +513,25 @@ internal fun SyncStatusBarAppearance(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    DisposableEffect(activity, lightStatusBars, orientation, syncTick) {
+    val lightNavigationBars = !dark
+    DisposableEffect(activity, lightStatusBars, lightNavigationBars, orientation, syncTick) {
         activity?.window?.let { window ->
-            WindowCompat.getInsetsController(window, window.decorView)
-                .isAppearanceLightStatusBars = lightStatusBars
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = lightStatusBars
+                isAppearanceLightNavigationBars = lightNavigationBars
+            }
         }
         onDispose { }
     }
-    LaunchedEffect(activity, dark, lightStatusBars) {
+    LaunchedEffect(activity, dark, lightStatusBars, lightNavigationBars) {
         val controller = activity?.window?.let { WindowCompat.getInsetsController(it, it.decorView) }
-        if (controller != null && controller.isAppearanceLightStatusBars != lightStatusBars) {
-            controller.isAppearanceLightStatusBars = lightStatusBars
+        if (controller != null) {
+            if (controller.isAppearanceLightStatusBars != lightStatusBars) {
+                controller.isAppearanceLightStatusBars = lightStatusBars
+            }
+            if (controller.isAppearanceLightNavigationBars != lightNavigationBars) {
+                controller.isAppearanceLightNavigationBars = lightNavigationBars
+            }
         }
     }
 }

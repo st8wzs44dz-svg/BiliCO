@@ -19,6 +19,8 @@ data class StoredSession(
     val face: String,
     val cookies: Map<String, String> = emptyMap(),
     val savedAt: Long = 0L,
+    val accessToken: String = "",
+    val refreshToken: String = "",
 )
 
 /** 多账号名册，落在同一个 DataStore 里的一份 JSON 列表。 */

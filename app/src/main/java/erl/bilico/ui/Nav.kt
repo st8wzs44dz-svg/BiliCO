@@ -215,6 +215,9 @@ class NavState {
     var mainTab by mutableIntStateOf(0)
         private set
 
+    /** 首页停留在番剧分段时临时切为深色，供根节点同步状态栏与导航栏图标明暗。 */
+    var mainForceDark by mutableStateOf(false)
+
     /** 供全屏转屏收尾后通知根节点按当前真栈顶重新对齐一次状态栏图标。 */
     var statusBarSyncTick by mutableIntStateOf(0)
         private set

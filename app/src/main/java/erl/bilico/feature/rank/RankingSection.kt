@@ -42,6 +42,7 @@ import erl.bilico.feature.feed.FeedSegmentRowHeight
 import erl.bilico.feature.feed.rememberWatchLaterAction
 import erl.bilico.ui.LocalTopBarBounds
 import erl.bilico.ui.TitleRowHeight
+import erl.bilico.feature.feed.HandleFeedPrimaryTap
 import erl.bilico.ui.NavState
 import erl.bilico.ui.asRowScrollState
 import erl.bilico.ui.attachToRow
@@ -74,6 +75,7 @@ fun RankingSection(
     active: Boolean,
     onCollapse: (Float) -> Unit,
     refreshTick: Int,
+    primaryTapTick: Int = 0,
 ) {
     val viewModel: RankingViewModel = viewModel { RankingViewModel(container.ranking) }
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -120,6 +122,15 @@ fun RankingSection(
             listState.animateScrollToItem(0)
         }
     }
+
+    HandleFeedPrimaryTap(
+        primaryTapTick = primaryTapTick,
+        active = active,
+        isRefreshing = state.isRefreshing,
+        gridState = listState,
+        pullState = pullState,
+        onRefresh = { viewModel.refresh() },
+    )
 
     FullPagePullToRefresh(
         isRefreshing = state.isRefreshing,

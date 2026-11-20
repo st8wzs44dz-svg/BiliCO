@@ -52,7 +52,7 @@ class AppContainer(context: Context) {
 
     val tokenRefresh = TokenRefreshHelper(client.passportApi, session)
 
-    val feed = FeedRepository(client.api, client.wbi, client.buvid)
+    val feed = FeedRepository(client.api, client.wbi, client.buvid, session)
 
     val video = VideoRepository(client.api, client.wbi, client.buvid, session, client.okHttp)
 

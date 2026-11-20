@@ -43,12 +43,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.widget.Toast
 import coil3.SingletonImageLoader
 import coil3.annotation.ExperimentalCoilApi
 import coil3.decode.BlackholeDecoder
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import erl.bilico.data.model.FeedVideo
+import erl.bilico.data.repository.FeedDislikeAction
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
 import erl.bilico.ui.LocalTopBarBounds
@@ -117,6 +119,7 @@ internal fun RecommendFeed(
     active: Boolean,
     onCollapse: (Float) -> Unit,
     refreshTick: Int,
+    primaryTapTick: Int = 0,
 ) {
     val viewModel: FeedViewModel = viewModel { FeedViewModel(container.feed) }
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -238,6 +241,17 @@ internal fun RecommendFeed(
         }
     }
 
+    HandleFeedPrimaryTap(
+        primaryTapTick = primaryTapTick,
+        active = active,
+        isRefreshing = state.isRefreshing,
+        gridState = listState,
+        pullState = pullState,
+        onRefresh = { viewModel.refresh() },
+    )
+
+    var dislikeTarget by remember { mutableStateOf<FeedVideo?>(null) }
+
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .distinctUntilChanged()
@@ -311,6 +325,7 @@ internal fun RecommendFeed(
                     modifier = Modifier.expandOrigin(origin),
                     onOpen = { nav.push(Route.Video(video.bvid), origin) },
                     onWatchLater = rememberWatchLaterAction(container, video),
+                    onNotInterested = { dislikeTarget = video },
                     generateBackground = imageWorkActive && visible,
                     onCoverSettled = { settledCovers[video.bvid] = video.cover },
                 )
@@ -347,6 +362,43 @@ internal fun RecommendFeed(
                 }
             }
         }
+    }
+
+    dislikeTarget?.let { target ->
+        val loggedIn = container.session.isLoggedIn()
+        FeedDislikeDialog(
+            video = target,
+            isLoggedIn = loggedIn,
+            onDismiss = { dislikeTarget = null },
+            onSelect = { action ->
+                dislikeTarget = null
+                val blockUpMid = if (action == FeedDislikeAction.BLOCK_UP) target.upMid else null
+                viewModel.hideVideo(target.bvid, blockUpMid = blockUpMid)
+                if (!loggedIn) {
+                    Toast.makeText(context, "已隐藏，登录后可同步优化推荐", Toast.LENGTH_SHORT).show()
+                } else {
+                    scope.launch {
+                        container.feed.dislike(target, action)
+                            .onSuccess {
+                                val tip = when (action) {
+                                    FeedDislikeAction.NOT_INTERESTED -> "已减少此类推荐"
+                                    FeedDislikeAction.BLOCK_UP -> "已减少该 UP 主推荐"
+                                    FeedDislikeAction.DISLIKE_VIDEO -> "已提交点踩反馈"
+                                }
+                                Toast.makeText(context, tip, Toast.LENGTH_SHORT).show()
+                            }
+                            .onFailure { error ->
+                                val msg = error.message?.takeIf { it.isNotBlank() }
+                                Toast.makeText(
+                                    context,
+                                    if (msg != null) "已本地隐藏（$msg）" else "已本地隐藏",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                    }
+                }
+            },
+        )
     }
 }
 

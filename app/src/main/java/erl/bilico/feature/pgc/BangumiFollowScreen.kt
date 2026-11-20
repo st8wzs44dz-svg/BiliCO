@@ -7,9 +7,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -40,9 +42,15 @@ fun BangumiFollowScreen(
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val coverWidthPx = remember(screenWidthDp, density) {
-        with(density) { (screenWidthDp.dp / 2 - 40.dp).roundToPx() }.coerceAtMost(600)
+        with(density) { ((screenWidthDp.dp - 34.dp) / 2f).roundToPx() }.coerceAtMost(600)
     }
-    val coverHeightPx = coverWidthPx * 4 / 3
+    val coverHeightPx = coverWidthPx * 3 / 2
+
+    val visibleKeys by remember(gridState) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            gridState.layoutInfo.visibleItemsInfo.mapTo(HashSet()) { it.key }
+        }
+    }
 
     LaunchedEffect(gridState) {
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
@@ -88,10 +96,14 @@ fun BangumiFollowScreen(
             key = { it.seasonId },
             contentType = { "bangumi-card" },
         ) { card ->
+            val visible by remember(gridState, card.seasonId) {
+                derivedStateOf { card.seasonId in visibleKeys }
+            }
             BangumiRankCard(
                 card = card,
                 coverWidthPx = coverWidthPx,
                 coverHeightPx = coverHeightPx,
+                generateBlur = visible,
                 onClick = { nav.push(Route.Pgc(card.seasonId, 0L)) },
             )
         }

@@ -32,9 +32,37 @@ class FeedViewModel(
 
     private var nextPage = 1
     private var inFlight = false
+    private val hiddenBvids = HashSet<String>()
+    private val hiddenUpMids = HashSet<Long>()
 
     init {
         refresh()
+    }
+
+    private fun List<FeedVideo>.filterHidden(): List<FeedVideo> =
+        filterNot { it.bvid in hiddenBvids || (it.upMid > 0L && it.upMid in hiddenUpMids) }
+
+    fun hideVideo(bvid: String, blockUpMid: Long? = null) {
+        hiddenBvids.add(bvid)
+        if (blockUpMid != null && blockUpMid > 0L) {
+            hiddenUpMids.add(blockUpMid)
+        }
+        _state.update { current ->
+            var removedBeforeBoundary = 0
+            val remaining = ArrayList<FeedVideo>(current.items.size)
+            current.items.forEachIndexed { index, item ->
+                val removed = item.bvid == bvid || (blockUpMid != null && blockUpMid > 0L && item.upMid == blockUpMid)
+                if (removed) {
+                    if (index < current.refreshInsertedCount) removedBeforeBoundary++
+                } else {
+                    remaining.add(item)
+                }
+            }
+            current.copy(
+                items = remaining,
+                refreshInsertedCount = (current.refreshInsertedCount - removedBeforeBoundary).coerceAtLeast(0),
+            )
+        }
     }
 
     fun refresh() {
@@ -49,7 +77,8 @@ class FeedViewModel(
         }
         viewModelScope.launch {
             repository.recommend(1)
-                .onSuccess { list ->
+                .onSuccess { rawList ->
+                    val list = rawList.filterHidden()
                     nextPage = 2
                     _state.update { current ->
                         val oldItems = current.items
@@ -101,8 +130,9 @@ class FeedViewModel(
         viewModelScope.launch {
             val page = nextPage
             repository.recommend(page)
-                .onSuccess { list ->
-                    if (list.isEmpty()) {
+                .onSuccess { rawList ->
+                    val list = rawList.filterHidden()
+                    if (rawList.isEmpty()) {
                         _state.update { it.copy(isLoadingMore = false, isEnd = true) }
                     } else {
                         nextPage = page + 1

@@ -60,6 +60,10 @@ jobs:
     timeout-minutes: 10
     permissions: {}
     environment: bilico-preview-signing
+    outputs:
+      version_name: ${{ steps.apk.outputs.version_name }}
+      version_code: ${{ steps.apk.outputs.version_code }}
+      filename: ${{ steps.apk.outputs.filename }}
     steps:
       - name: Download the unsigned APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -137,7 +141,12 @@ jobs:
           mkdir -p signed
           filename="BiliCO-$version_name.apk"
           mv "$signing_dir/signed.apk" "signed/$filename"
-          printf 'path=signed/%s\n' "$filename" >> "$GITHUB_OUTPUT"
+          {
+            printf 'path=signed/%s\n' "$filename"
+            printf 'filename=%s\n' "$filename"
+            printf 'version_name=%s\n' "$version_name"
+            printf 'version_code=%s\n' "$version_code"
+          } >> "$GITHUB_OUTPUT"
           printf 'Verified %s (%s), versionCode %s, certificate SHA-256 %s\n' \
             "$filename" "$package" "$version_code" "$fingerprint"
       - name: Upload the signed APK
@@ -147,3 +156,47 @@ jobs:
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 7
+
+  publish:
+    needs: sign
+    if: >-
+      github.repository == 'astarion1965974/BiliCO' &&
+      github.ref == 'refs/heads/build/keep-screen-on-apk'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download the signed APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: BiliCO-signed-APK
+          path: signed
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ needs.sign.outputs.version_name }}
+          VERSION_CODE: ${{ needs.sign.outputs.version_code }}
+          APK_FILENAME: ${{ needs.sign.outputs.filename }}
+        run: |
+          apk_path="signed/$APK_FILENAME"
+          if [[ ! -f "$apk_path" ]]; then
+            echo "::error::Signed APK not found at $apk_path"
+            exit 1
+          fi
+          tag="v$VERSION_NAME"
+          prerelease_args=()
+          if [[ "$VERSION_NAME" == *-* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk_path" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$apk_path" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "BiliCO $tag" \
+              --generate-notes \
+              "${prerelease_args[@]}"
+          fi

@@ -33,6 +33,9 @@ object AppSignUtils {
     fun signForAndroidHdLogin(params: Map<String, String>): Map<String, String> =
         signEncoded(params + ("appkey" to ANDROID_HD_APP_KEY), ANDROID_HD_APP_SEC)
 
+    fun signForAndroidHdApi(params: Map<String, String>): Map<String, String> =
+        signForAndroidHdLogin(params + ("ts" to getTimestamp().toString()))
+
     fun signForTvLogin(params: Map<String, String>): Map<String, String> =
         signEncoded(params + ("appkey" to TV_APP_KEY), TV_APP_SEC)
 

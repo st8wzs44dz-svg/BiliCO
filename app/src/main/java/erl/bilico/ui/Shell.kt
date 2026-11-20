@@ -28,6 +28,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -111,7 +112,9 @@ fun MainShell(nav: NavState, container: AppContainer) {
     var dynamicCollapse by remember { mutableFloatStateOf(0f) }
     var dynamicFilterIndex by rememberSaveable { mutableIntStateOf(0) }
     var feedRefreshTick by remember { mutableIntStateOf(0) }
+    var feedPrimaryTapTick by remember { mutableIntStateOf(0) }
     var dynamicRefreshTick by remember { mutableIntStateOf(0) }
+    val userDarkMode by container.settings.darkMode.collectAsStateWithLifecycle()
 
     val searchViewModel: SearchViewModel = viewModel { SearchViewModel(container.search) }
     val searchState by searchViewModel.state.collectAsStateWithLifecycle()
@@ -236,209 +239,223 @@ fun MainShell(nav: NavState, container: AppContainer) {
     var settledOrbVisible by remember { mutableStateOf(rawOrbVisible) }
     SideEffect { if (!enteringOverMain) settledOrbVisible = rawOrbVisible }
 
-    Box(Modifier.fillMaxSize()) {
-        // Layer 1: 页面主内容。单独一层 RenderNode：下面几层的模糊、弹簧动画不会带着整页一起重录。
-        CompositionLocalProvider(LocalTopBarBounds provides topBarBounds) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {}
-                    .layerBackdropIf(BlurEffectsEnabled, backdrop)
-                    .background(pageContainerColor())
-                    .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
-            ) {
-                Crossfade(
-                    targetState = tab,
-                    animationSpec = tween(MainTabFadeMillis),
-                    modifier = Modifier.fillMaxSize(),
-                    label = "mainTabPage",
-                ) { page ->
-                    holder.SaveableStateProvider(page) {
-                        when (page) {
-                            0 -> FeedScreen(
-                                container = container,
-                                nav = nav,
-                                topInset = topBarHeight,
-                                segment = segment,
-                                onSegment = { segment = it },
-                                onCollapse = { feedCollapse = it },
-                                pagerState = feedPager,
-                                refreshTick = feedRefreshTick,
-                            )
+    val inBangumiSegment by remember(tab, feedPager, feedPanelCovering) {
+        derivedStateOf { tab == FEED_TAB_INDEX && feedPager.targetPage == 2 && !feedPanelCovering }
+    }
+    SideEffect { nav.mainForceDark = inBangumiSegment }
+    DisposableEffect(nav) {
+        onDispose { nav.mainForceDark = false }
+    }
 
-                            1 -> DynamicScreen(
-                                container = container,
-                                nav = nav,
-                                topInset = topBarHeight,
-                                filterIndex = dynamicFilterIndex,
-                                onFilterSelect = { dynamicFilterIndex = it },
-                                pagerState = dynamicPager,
-                                onCollapse = { dynamicCollapse = it },
-                                refreshTick = dynamicRefreshTick,
-                            )
+    BiliCoTheme(darkMode = if (inBangumiSegment) 2 else userDarkMode) {
+        Box(Modifier.fillMaxSize()) {
+            // Layer 1: 页面主内容。单独一层 RenderNode：下面几层的模糊、弹簧动画不会带着整页一起重录。
+            CompositionLocalProvider(LocalTopBarBounds provides topBarBounds) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {}
+                        .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                        .background(pageContainerColor())
+                        .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
+                ) {
+                    Crossfade(
+                        targetState = tab,
+                        animationSpec = tween(MainTabFadeMillis),
+                        modifier = Modifier.fillMaxSize(),
+                        label = "mainTabPage",
+                    ) { page ->
+                        holder.SaveableStateProvider(page) {
+                            when (page) {
+                                0 -> FeedScreen(
+                                    container = container,
+                                    nav = nav,
+                                    topInset = topBarHeight,
+                                    segment = segment,
+                                    onSegment = { segment = it },
+                                    onCollapse = { feedCollapse = it },
+                                    pagerState = feedPager,
+                                    refreshTick = feedRefreshTick,
+                                    primaryTapTick = feedPrimaryTapTick,
+                                )
 
-                            else -> MeScreen(
-                                container = container,
-                                nav = nav,
-                                topInset = topBarHeight,
-                            )
+                                1 -> DynamicScreen(
+                                    container = container,
+                                    nav = nav,
+                                    topInset = topBarHeight,
+                                    filterIndex = dynamicFilterIndex,
+                                    onFilterSelect = { dynamicFilterIndex = it },
+                                    pagerState = dynamicPager,
+                                    onCollapse = { dynamicCollapse = it },
+                                    refreshTick = dynamicRefreshTick,
+                                )
+
+                                else -> MeScreen(
+                                    container = container,
+                                    nav = nav,
+                                    topInset = topBarHeight,
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（在搜索面板之下，展开时会被面板盖住）
-        CompositionLocalProvider(
-            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-            LocalEdgeToEdge provides true,
-        ) {
-            PinnedBarDensity {
-                MainBarUnderlay(
-                    tab = tab,
-                    collapsed = collapsed,
-                    feedPager = feedPager,
-                    onSegment = { segment = it },
-                    dynamicPager = dynamicPager,
-                    onDynamicFilter = { dynamicFilterIndex = it },
-                    onFeedReselect = { feedRefreshTick++ },
-                    onDynamicReselect = { dynamicRefreshTick++ },
-                    onDoubleTap = {
-                        when (tab) {
-                            0 -> feedRefreshTick++
-                            1 -> dynamicRefreshTick++
-                        }
-                    },
-                    searchExpanded = searchExpanded,
-                    panelCovering = feedPanelCovering,
-                    bounds = topBarBounds,
-                    modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().graphicsLayer {},
-                )
-            }
-        }
-
-        // Layer 3: 悬浮底部导航栏（在搜索面板之下，展开时被面板盖住）
-        val context = LocalContext.current
-        CompositionLocalProvider(
-            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-            LocalPlatformBottomBarMaterialEnabled provides false,
-        ) {
-            PinnedBarDensity {
-                FloatingBottomBar(
-                    tab = tab,
-                    onTab = { target -> if (!feedPanelCovering) nav.setTab(target) },
-                    onReselect = { index ->
-                        if (!feedPanelCovering) {
-                            when (index) {
+            // Layer 2: 顶栏模糊材质层 + 分段胶囊行（在搜索面板之下，展开时会被面板盖住）
+            CompositionLocalProvider(
+                LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                LocalEdgeToEdge provides true,
+            ) {
+                PinnedBarDensity {
+                    MainBarUnderlay(
+                        tab = tab,
+                        collapsed = collapsed,
+                        feedPager = feedPager,
+                        onSegment = { segment = it },
+                        dynamicPager = dynamicPager,
+                        onDynamicFilter = { dynamicFilterIndex = it },
+                        onFeedReselect = { feedRefreshTick++ },
+                        onDynamicReselect = { dynamicRefreshTick++ },
+                        onDoubleTap = {
+                            when (tab) {
                                 0 -> feedRefreshTick++
                                 1 -> dynamicRefreshTick++
                             }
-                        }
-                    },
-                    orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
-                    leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
-                    onLeftOrbClick = {
-                        if (!feedPanelCovering) {
-                            if (account == null) nav.push(Route.Login) else dynamicComposerOpen = true
-                        }
-                    },
-                    orbOrigin = nav.orbOrigin,
-                    orbArtworkUrl = PlaybackBridge.currentArtworkUrl,
-                    orbIsPlaying = PlaybackBridge.currentIsPlaying && onMainTab,
-                    onOrbClick = { if (!feedPanelCovering) nav.restoreMinimized() },
-                    onOrbTogglePlay = { PlaybackBridge.togglePlayPause(context) },
-                    onOrbStop = { nav.dismissMinimized(pausePlayback = true) },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .graphicsLayer {}
-                        .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
-                )
-            }
-        }
-
-        // Layer 4: 首页搜索整屏面板（从屏幕顶 0 铺满到屏幕底部，位于常态顶栏与底栏之上、搜索胶囊之下）
-        if (feedPanelCovering) {
-            HomeSearchOverlay(
-                topBarHeight = topBarHeight,
-                searchBackdrop = searchBackdrop,
-                searchExpanded = searchExpanded,
-                panelProgress = { panelProgress.value },
-                panelAlpha = { panelAlpha.value },
-                state = searchState,
-                transitionState = searchTransition,
-                history = searchHistory,
-                viewModel = searchViewModel,
-                container = container,
-                nav = nav,
-                barBounds = topBarBounds,
-                onSelectKeyword = submitHomeSearch,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        // Layer 4.5: 搜索面板之上的融合球。面板铺满整屏，会盖住底栏上的那颗，
-        // 从搜索结果的视频返回时球就被面板吞掉。这里补一颗，面板收起后交还底栏那颗。
-        if (feedPanelCovering && (nav.minimizedEntry != null || nav.isMinimizingToOrb)) {
-            nav.orbOrigin?.let { origin ->
-                CompositionLocalProvider(
-                    LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-                ) {
-                    SecondaryPlaybackOrbOverlay(nav = nav, orbOrigin = origin)
-                }
-            }
-        }
-
-        // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
-        CompositionLocalProvider(
-            LocalBackdrop provides if (BlurEffectsEnabled) {
-                if (feedPanelCovering) searchBackdrop else backdrop
-            } else {
-                null
-            },
-            LocalEdgeToEdge provides true,
-        ) {
-            PinnedBarDensity {
-                MainTitleRow(
-                    tab = tab,
-                    nav = nav,
-                    collapsed = collapsed,
-                    avatarUrl = account?.face,
-                    onAvatarClick = { nav.setTab(ME_TAB_INDEX) },
-                    searchState = searchState,
-                    onQueryChange = searchViewModel::onQueryChange,
-                    searchExpanded = searchExpanded,
-                    onSearchOpen = openFeedSearch,
-                    onSearchCancel = cancelFeedSearch,
-                    onSearchSubmit = submitHomeSearch,
-                    showingResults = searchTransition.filtersVisible,
-                    onTabChange = searchViewModel::setTab,
-                    onSortMenuOpen = { sortMenuExpanded = true },
-                    panelAlpha = { panelAlpha.value },
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .graphicsLayer {}
-                        .then(if (feedPanelCovering) Modifier.reportTopBarBottom(topBarBounds) else Modifier),
-                )
-                // 排序圆钮的菜单宿主：圆钮画在 FeedTitleRow 的胶囊行里，这里只把锚点落到它身上。
-                if (feedPanelCovering && showingResults) {
-                    SearchSortMenuHost(
-                        expanded = sortMenuExpanded,
-                        onExpandedChange = { sortMenuExpanded = it },
-                        state = searchState,
-                        viewModel = searchViewModel,
-                        modifier = Modifier.align(Alignment.TopCenter),
+                        },
+                        searchExpanded = searchExpanded,
+                        panelCovering = feedPanelCovering,
+                        bounds = topBarBounds,
+                        modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().graphicsLayer {},
                     )
                 }
             }
-        }
 
-        DynamicPublishOverlay(
-            container = container,
-            composerOpen = dynamicComposerOpen,
-            onDismissComposer = { dynamicComposerOpen = false },
-            onPublished = { dynamicRefreshTick++ },
-        )
+            // Layer 3: 悬浮底部导航栏（在搜索面板之下，展开时被面板盖住）
+            val context = LocalContext.current
+            CompositionLocalProvider(
+                LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                LocalPlatformBottomBarMaterialEnabled provides false,
+            ) {
+                PinnedBarDensity {
+                    FloatingBottomBar(
+                        tab = tab,
+                        onTab = { target -> if (!feedPanelCovering) nav.setTab(target) },
+                        onReselect = { index ->
+                            if (!feedPanelCovering) {
+                                when (index) {
+                                    0 -> feedRefreshTick++
+                                    1 -> dynamicRefreshTick++
+                                }
+                            }
+                        },
+                        onPrimaryReselect = {
+                            if (!feedPanelCovering) feedPrimaryTapTick++
+                        },
+                        orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
+                        leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
+                        onLeftOrbClick = {
+                            if (!feedPanelCovering) {
+                                if (account == null) nav.push(Route.Login) else dynamicComposerOpen = true
+                            }
+                        },
+                        orbOrigin = nav.orbOrigin,
+                        orbArtworkUrl = PlaybackBridge.currentArtworkUrl,
+                        orbIsPlaying = PlaybackBridge.currentIsPlaying && onMainTab,
+                        onOrbClick = { if (!feedPanelCovering) nav.restoreMinimized() },
+                        onOrbTogglePlay = { PlaybackBridge.togglePlayPause(context) },
+                        onOrbStop = { nav.dismissMinimized(pausePlayback = true) },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .graphicsLayer {}
+                            .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
+                    )
+                }
+            }
+
+            // Layer 4: 首页搜索整屏面板（从屏幕顶 0 铺满到屏幕底部，位于常态顶栏与底栏之上、搜索胶囊之下）
+            if (feedPanelCovering) {
+                HomeSearchOverlay(
+                    topBarHeight = topBarHeight,
+                    searchBackdrop = searchBackdrop,
+                    searchExpanded = searchExpanded,
+                    panelProgress = { panelProgress.value },
+                    panelAlpha = { panelAlpha.value },
+                    state = searchState,
+                    transitionState = searchTransition,
+                    history = searchHistory,
+                    viewModel = searchViewModel,
+                    container = container,
+                    nav = nav,
+                    barBounds = topBarBounds,
+                    onSelectKeyword = submitHomeSearch,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            // Layer 4.5: 搜索面板之上的融合球。面板铺满整屏，会盖住底栏上的那颗，
+            // 从搜索结果的视频返回时球就被面板吞掉。这里补一颗，面板收起后交还底栏那颗。
+            if (feedPanelCovering && (nav.minimizedEntry != null || nav.isMinimizingToOrb)) {
+                nav.orbOrigin?.let { origin ->
+                    CompositionLocalProvider(
+                        LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                    ) {
+                        SecondaryPlaybackOrbOverlay(nav = nav, orbOrigin = origin)
+                    }
+                }
+            }
+
+            // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
+            CompositionLocalProvider(
+                LocalBackdrop provides if (BlurEffectsEnabled) {
+                    if (feedPanelCovering) searchBackdrop else backdrop
+                } else {
+                    null
+                },
+                LocalEdgeToEdge provides true,
+            ) {
+                PinnedBarDensity {
+                    MainTitleRow(
+                        tab = tab,
+                        nav = nav,
+                        collapsed = collapsed,
+                        avatarUrl = account?.face,
+                        onAvatarClick = { nav.setTab(ME_TAB_INDEX) },
+                        searchState = searchState,
+                        onQueryChange = searchViewModel::onQueryChange,
+                        searchExpanded = searchExpanded,
+                        onSearchOpen = openFeedSearch,
+                        onSearchCancel = cancelFeedSearch,
+                        onSearchSubmit = submitHomeSearch,
+                        showingResults = searchTransition.filtersVisible,
+                        onTabChange = searchViewModel::setTab,
+                        onSortMenuOpen = { sortMenuExpanded = true },
+                        panelAlpha = { panelAlpha.value },
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .graphicsLayer {}
+                            .then(if (feedPanelCovering) Modifier.reportTopBarBottom(topBarBounds) else Modifier),
+                    )
+                    // 排序圆钮的菜单宿主：圆钮画在 FeedTitleRow 的胶囊行里，这里只把锚点落到它身上。
+                    if (feedPanelCovering && showingResults) {
+                        SearchSortMenuHost(
+                            expanded = sortMenuExpanded,
+                            onExpandedChange = { sortMenuExpanded = it },
+                            state = searchState,
+                            viewModel = searchViewModel,
+                            modifier = Modifier.align(Alignment.TopCenter),
+                        )
+                    }
+                }
+            }
+
+            DynamicPublishOverlay(
+                container = container,
+                composerOpen = dynamicComposerOpen,
+                onDismissComposer = { dynamicComposerOpen = false },
+                onPublished = { dynamicRefreshTick++ },
+            )
+        }
     }
 
     val inHomeSearchResults =

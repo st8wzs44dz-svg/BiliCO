@@ -376,6 +376,16 @@ interface BiliApi {
     @FormUrlEncoded
     @POST("https://api.vc.bilibili.com/web_im/v1/web_im/send_msg")
     suspend fun imSendMsg(@FieldMap params: Map<String, String>): ImSendMsgResponse
+
+    @GET("https://app.bilibili.com/x/feed/dislike")
+    suspend fun feedDislike(@QueryMap params: Map<String, String>): BaseResponse
+
+    @GET("https://app.bilibili.com/x/feed/dislike/cancel")
+    suspend fun feedDislikeCancel(@QueryMap params: Map<String, String>): BaseResponse
+
+    @FormUrlEncoded
+    @POST("https://app.bilibili.com/x/v2/view/dislike")
+    suspend fun viewDislike(@FieldMap params: Map<String, String>): BaseResponse
 }
 
 interface PassportApi {
@@ -385,10 +395,33 @@ interface PassportApi {
     @GET("x/passport-login/web/qrcode/poll")
     suspend fun pollQrCode(@Query("qrcode_key") key: String): QrPollResponse
 
+    @POST("x/passport-tv-login/qrcode/auth_code")
+    suspend fun generateTvQrCode(@QueryMap params: Map<String, String>): TvAuthCodeResponse
+
+    @FormUrlEncoded
+    @POST("x/passport-tv-login/h5/qrcode/confirm")
+    suspend fun confirmTvQrCode(@FieldMap params: Map<String, String>): BaseResponse
+
+    @POST("x/passport-tv-login/qrcode/poll")
+    suspend fun pollTvQrCode(@QueryMap params: Map<String, String>): TvRefreshResponse
+
     @FormUrlEncoded
     @POST("x/passport-tv-login/h5/refresh")
     suspend fun refreshToken(@FieldMap params: Map<String, String>): TvRefreshResponse
 }
+
+@kotlinx.serialization.Serializable
+data class TvAuthCodeResponse(
+    val code: Int = 0,
+    val message: String = "",
+    val data: TvAuthCodeData? = null,
+)
+
+@kotlinx.serialization.Serializable
+data class TvAuthCodeData(
+    val url: String = "",
+    @kotlinx.serialization.SerialName("auth_code") val authCode: String = "",
+)
 
 @kotlinx.serialization.Serializable
 data class TvRefreshResponse(
