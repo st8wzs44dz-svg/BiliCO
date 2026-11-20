@@ -3,6 +3,7 @@ name: Build BiliCO preview APK
 on:
   push:
     branches: [build/keep-screen-on-apk]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -54,8 +55,7 @@ jobs:
     needs: build
     if: >-
       github.repository == 'astarion1965974/BiliCO' &&
-      github.ref == 'refs/heads/build/keep-screen-on-apk' &&
-      vars.BILICO_SIGNING_ENABLED == 'true'
+      github.ref == 'refs/heads/build/keep-screen-on-apk'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
@@ -103,7 +103,7 @@ jobs:
           umask 077
           signing_dir=$(mktemp -d "$RUNNER_TEMP/bilico-signing.XXXXXXXX")
           trap 'rm -rf -- "$signing_dir"' EXIT
-          printf '%s' "$BILICO_KEYSTORE_BASE64" | base64 --decode > "$signing_dir/bilico-update.p12"
+          printf '%s' "$BILICO_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$signing_dir/bilico-update.p12"
           unset BILICO_KEYSTORE_BASE64
           export BILICO_KEY_PASSWORD="${BILICO_KEY_PASSWORD:-$BILICO_KEYSTORE_PASSWORD}"
 
@@ -114,12 +114,25 @@ jobs:
             --out "$signing_dir/signed.apk" "$signing_dir/aligned.apk"
           unset BILICO_KEYSTORE_PASSWORD BILICO_KEY_PASSWORD
 
+          expected_fingerprint=f19b32484e83bd662ca45ea0855aa434ecab50a204c3d05bb012f2dba7d33f03
           verification=$("$build_tools/apksigner" verify --print-certs "$signing_dir/signed.apk")
-          fingerprint=$(sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: ([[:xdigit:]]+)$/\1/p' <<< "$verification")
-          if [[ "${fingerprint,,}" != f19b32484e83bd662ca45ea0855aa434ecab50a204c3d05bb012f2dba7d33f03 ]]; then
+          mapfile -t fingerprints < <(
+            awk '
+              /^((V[0-9]+(\.[0-9]+)? )?Signer( #[0-9]+)?( \([^)]*\))?:? )certificate SHA-256 digest: / {
+                digest = tolower($NF)
+                gsub(/[^0-9a-f]/, "", digest)
+                if (length(digest) == 64 && !seen[digest]++) {
+                  print digest
+                }
+              }
+            ' <<< "$verification"
+          )
+          if [[ ${#fingerprints[@]} -ne 1 || "${fingerprints[0]}" != "$expected_fingerprint" ]]; then
             echo '::error::The APK signature does not match the certificate used for BiliCO pre.11.'
+            printf '%s\n' "$verification"
             exit 1
           fi
+          fingerprint=${fingerprints[0]}
 
           mkdir -p signed
           filename="BiliCO-$version_name.apk"
