@@ -1,6 +1,8 @@
 package erl.bilico
 
 import android.content.BroadcastReceiver
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -37,6 +39,8 @@ class MainActivity : ComponentActivity() {
 
     private var inPipMode by mutableStateOf(false)
     private var pendingVideoLink by mutableStateOf<ExternalVideoLink?>(null)
+    private var clipboardVideoLink by mutableStateOf<ExternalVideoLink?>(null)
+    private var lastPromptedClipboardText: String? = null
 
     private val pipListener = Consumer<PictureInPictureModeChangedInfo> { info ->
         inPipMode = info.isInPictureInPictureMode
@@ -111,9 +115,21 @@ class MainActivity : ComponentActivity() {
                     onDispose { }
                 }
                 CompositionLocalProvider(LocalInPipMode provides inPipMode) {
-                    BiliCoRoot(container, pendingVideoLink) { handled ->
-                        if (pendingVideoLink === handled) pendingVideoLink = null
-                    }
+                    BiliCoRoot(
+                        container = container,
+                        externalVideoLink = pendingVideoLink,
+                        onVideoLinkHandled = { handled ->
+                            if (pendingVideoLink === handled) pendingVideoLink = null
+                        },
+                        clipboardVideoLink = clipboardVideoLink,
+                        onOpenClipboardLink = { link ->
+                            clipboardVideoLink = null
+                            pendingVideoLink = link
+                        },
+                        onDismissClipboardLink = {
+                            clipboardVideoLink = null
+                        },
+                    )
                 }
             }
         }
@@ -122,12 +138,37 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        ExternalVideoLink.fromIntent(intent)?.let { pendingVideoLink = it }
+        ExternalVideoLink.fromIntent(intent)?.let {
+            clipboardVideoLink = null
+            pendingVideoLink = it
+        }
     }
 
     override fun onResume() {
         super.onResume()
         voteHighRefreshRate()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !inPipMode && pendingVideoLink == null) {
+            checkClipboardForBiliLink()
+        }
+    }
+
+    private fun checkClipboardForBiliLink() {
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        val desc = clipboard.primaryClipDescription ?: return
+        val hasText = desc.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) ||
+            desc.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
+        if (!hasText) return
+        val text = runCatching {
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+        }.getOrNull().orEmpty()
+        if (text.isEmpty() || text == lastPromptedClipboardText) return
+        val parsed = ExternalVideoLink.fromText(text) ?: return
+        lastPromptedClipboardText = text
+        clipboardVideoLink = parsed
     }
 
     /**

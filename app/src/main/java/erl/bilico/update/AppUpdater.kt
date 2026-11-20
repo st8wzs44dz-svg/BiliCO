@@ -9,14 +9,19 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Xml
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
+import androidx.core.text.HtmlCompat
 import erl.bilico.BuildConfig
 import erl.bilico.data.settings.SettingsRepository
+import org.xmlpull.v1.XmlPullParser
+import java.io.StringReader
+import java.net.URLDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -62,6 +67,11 @@ object AppUpdater {
     private const val REPO = BuildConfig.UPDATE_REPOSITORY
     const val repositoryUrl = "https://github.com/$REPO"
     private const val API = "https://api.github.com/repos/$REPO/releases?per_page=20"
+    private const val ATOM_FEED = "https://github.com/$REPO/releases.atom"
+    private val EXPANDED_ASSET_HREF = Regex(
+        """href="(/[^"]+/releases/download/[^"]+\.apk)"""",
+        RegexOption.IGNORE_CASE,
+    )
 
     private const val SEGMENTS = 4
 
@@ -95,6 +105,15 @@ object AppUpdater {
         releases.firstOrNull { it.apk != null && compareVersion(it.version, currentVersion) > 0 }
 
     suspend fun releases(includePrerelease: Boolean): List<UpdateInfo> = withContext(Dispatchers.IO) {
+        val apiResult = runCatching { fetchReleasesFromApi(includePrerelease) }
+        apiResult.getOrNull()?.let { return@withContext it }
+        // api.github.com 未认证接口在共享代理 IP 下极易触发 60 次/小时 403 限流，
+        // 自动降级到不受 API 配额限制的 github.com/releases.atom + expanded_assets。
+        runCatching { fetchReleasesFromAtom(includePrerelease) }.getOrNull()
+            ?: throw (apiResult.exceptionOrNull() ?: IOException("检查更新失败"))
+    }
+
+    private fun fetchReleasesFromApi(includePrerelease: Boolean): List<UpdateInfo> {
         val req = Request.Builder()
             .url(API)
             .header("Accept", "application/vnd.github+json")
@@ -104,7 +123,140 @@ object AppUpdater {
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             resp.body.string()
         }
-        parseReleases(body, includePrerelease)
+        return parseReleases(body, includePrerelease)
+    }
+
+    private suspend fun fetchReleasesFromAtom(includePrerelease: Boolean): List<UpdateInfo> {
+        val req = Request.Builder()
+            .url(ATOM_FEED)
+            .header("Accept", "application/atom+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("User-Agent", "BiliCO-Android")
+            .build()
+        val xml = client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+            resp.body.string()
+        }
+        val parsed = parseAtomReleases(xml, includePrerelease)
+        if (parsed.isEmpty()) return emptyList()
+        // 仅对最新 3 个版本并发解析 expanded_assets，既保证最新版本拿到签名 APK 直链又避免多余请求。
+        return coroutineScope {
+            parsed.mapIndexed { index, entry ->
+                if (index < 3) {
+                    async(Dispatchers.IO) {
+                        val apk = runCatching { fetchApkFromExpandedAssets(entry.tag, entry.info.version) }.getOrNull()
+                        entry.info.copy(apk = apk)
+                    }
+                } else {
+                    async { entry.info }
+                }
+            }.awaitAll()
+        }
+    }
+
+    private data class AtomReleaseEntry(
+        val tag: String,
+        val info: UpdateInfo,
+    )
+
+    private fun parseAtomReleases(xml: String, includePrerelease: Boolean): List<AtomReleaseEntry> {
+        val parser = Xml.newPullParser()
+        parser.setInput(StringReader(xml))
+        val entries = mutableListOf<AtomReleaseEntry>()
+        var inEntry = false
+        var currentTag: String? = null
+        var linkHref = ""
+        var updated = ""
+        var contentHtml = ""
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    val name = parser.name
+                    if (name == "entry") {
+                        inEntry = true
+                        linkHref = ""
+                        updated = ""
+                        contentHtml = ""
+                    } else if (inEntry) {
+                        currentTag = name
+                        if (name == "link") {
+                            val href = parser.getAttributeValue(null, "href").orEmpty()
+                            if (href.contains("/releases/tag/")) linkHref = href
+                        }
+                    }
+                }
+                XmlPullParser.TEXT -> if (inEntry) {
+                    when (currentTag) {
+                        "updated" -> updated += parser.text.orEmpty()
+                        "content" -> contentHtml += parser.text.orEmpty()
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "entry" && inEntry) {
+                        inEntry = false
+                        val rawTag = linkHref.substringAfter("/releases/tag/", "")
+                            .substringBefore('?')
+                            .substringBefore('#')
+                            .trim()
+                        val tag = runCatching { URLDecoder.decode(rawTag, "UTF-8") }.getOrDefault(rawTag)
+                        val version = tag.removePrefix("v").removePrefix("V")
+                        if (version.isNotEmpty()) {
+                            val prerelease = version.contains('-')
+                            if (includePrerelease || !prerelease) {
+                                val notes = if (contentHtml.isNotBlank()) {
+                                    HtmlCompat.fromHtml(contentHtml, HtmlCompat.FROM_HTML_MODE_COMPACT)
+                                        .toString()
+                                        .trim()
+                                } else {
+                                    ""
+                                }
+                                entries += AtomReleaseEntry(
+                                    tag = tag,
+                                    info = UpdateInfo(
+                                        version = version,
+                                        notes = notes,
+                                        apk = null,
+                                        pageUrl = linkHref.ifBlank { "$repositoryUrl/releases/tag/$tag" },
+                                        prerelease = prerelease,
+                                        publishedAt = updated.trim(),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                    currentTag = null
+                }
+            }
+            event = parser.next()
+        }
+        return entries.sortedWith { a, b -> compareVersion(b.info.version, a.info.version) }
+    }
+
+    private fun fetchApkFromExpandedAssets(tag: String, version: String): UpdateApk? {
+        val req = Request.Builder()
+            .url("https://github.com/$REPO/releases/expanded_assets/$tag")
+            .header("User-Agent", "BiliCO-Android")
+            .build()
+        val html = client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            resp.body.string()
+        }
+        val preferredName = "BiliCO-$version.apk"
+        val candidates = buildList {
+            for (match in EXPANDED_ASSET_HREF.findAll(html)) {
+                val path = match.groupValues[1]
+                val fullUrl = "https://github.com$path"
+                val fileName = path.substringAfterLast('/')
+                if (fileName.contains("unsigned", ignoreCase = true) ||
+                    !fullUrl.startsWith("$repositoryUrl/releases/download/")
+                ) continue
+                val stableId = (path.hashCode().toLong() and 0x7FFF_FFFFL).coerceAtLeast(1L)
+                val apk = UpdateApk(stableId, fullUrl)
+                if (fileName == preferredName) return apk
+                add(apk)
+            }
+        }
+        return candidates.singleOrNull()
     }
 
     internal fun parseReleases(body: String, includePrerelease: Boolean): List<UpdateInfo> {

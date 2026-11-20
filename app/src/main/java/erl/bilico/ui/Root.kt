@@ -6,13 +6,27 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -22,7 +36,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import erl.bilico.ui.components.navBottomPadding
+import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -96,7 +120,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val BareBvid = Regex("BV[0-9A-Za-z]{10}")
@@ -134,6 +157,9 @@ internal fun BiliCoRoot(
     container: AppContainer,
     externalVideoLink: ExternalVideoLink? = null,
     onVideoLinkHandled: (ExternalVideoLink) -> Unit = {},
+    clipboardVideoLink: ExternalVideoLink? = null,
+    onOpenClipboardLink: (ExternalVideoLink) -> Unit = {},
+    onDismissClipboardLink: () -> Unit = {},
 ) {
     val nav = remember { NavState() }
     val origins = remember { ImageOrigins() }
@@ -157,20 +183,35 @@ internal fun BiliCoRoot(
 
     LaunchedEffect(externalVideoLink) {
         val link = externalVideoLink ?: return@LaunchedEffect
-        val bvid = link.bvid ?: link.aid?.let { container.messages.resolveBvid(it).getOrNull() }
-        if (bvid == null) {
-            Toast.makeText(context, "无法打开此视频链接", Toast.LENGTH_SHORT).show()
+        val resolved = if (link.shortUrl != null) {
+            val landed = container.video.resolveRedirectUrl(link.shortUrl)
+            landed?.let { ExternalVideoLink.fromUri(Uri.parse(it)) }
         } else {
-            val current = nav.stack.lastOrNull { !it.exiting }?.route as? Route.Video
-            if (current?.bvid != bvid) {
-                nav.push(Route.Video(bvid, startSec = link.startSec))
-            } else if (link.startSec > 0L) {
-                val active = PlaybackBridge.activePlayer
-                if (active != null) {
-                    active.seekTo(link.startSec * 1000L)
-                    if (!active.isPlaying) active.play()
+            link
+        }
+        val target = resolved ?: link
+        val startSec = if (target.startSec > 0L) target.startSec else link.startSec
+        when {
+            target.seasonId > 0L || target.epId > 0L -> {
+                nav.push(Route.Pgc(seasonId = target.seasonId, epId = target.epId, startSec = startSec))
+            }
+            else -> {
+                val bvid = target.bvid ?: target.aid?.let { container.messages.resolveBvid(it).getOrNull() }
+                if (bvid == null) {
+                    Toast.makeText(context, "无法打开此视频链接", Toast.LENGTH_SHORT).show()
                 } else {
-                    nav.replaceTop(Route.Video(bvid, startSec = link.startSec))
+                    val current = nav.stack.lastOrNull { !it.exiting }?.route as? Route.Video
+                    if (current?.bvid != bvid) {
+                        nav.push(Route.Video(bvid, startSec = startSec))
+                    } else if (startSec > 0L) {
+                        val active = PlaybackBridge.activePlayer
+                        if (active != null) {
+                            active.seekTo(startSec * 1000L)
+                            if (!active.isPlaying) active.play()
+                        } else {
+                            nav.replaceTop(Route.Video(bvid, startSec = startSec))
+                        }
+                    }
                 }
             }
         }
@@ -342,6 +383,19 @@ internal fun BiliCoRoot(
             }
         }
 
+        // 剪贴板识别到 B 站链接时的轻量悬浮提示条（避免正在看的同一视频重复提醒）。
+        val currentVideoBvid = (topRoute as? Route.Video)?.bvid
+        val activeClipboardLink = clipboardVideoLink?.takeUnless {
+            it.bvid != null && it.bvid == currentVideoBvid
+        }
+        ClipboardLinkBanner(
+            link = if (!inPipMode) activeClipboardLink else null,
+            bottomInset = if (topRoute == Route.Main) 86.dp + navBottomPadding() else 18.dp + navBottomPadding(),
+            onOpen = onOpenClipboardLink,
+            onDismiss = onDismissClipboardLink,
+            modifier = Modifier.align(Alignment.BottomCenter).zIndex(4.5f),
+        )
+
         // 弹窗宿主：COUI 的 OverlayDialog 只往 LocalDialogStates 里登记，没有这个宿主就什么都不画。
         Box(Modifier.fillMaxSize().zIndex(5f)) {
             CompositionLocalProvider(
@@ -360,6 +414,82 @@ internal fun BiliCoRoot(
 
         // 更新提示挂在根节点：自动检查、设置页手动检查以及更新日志页预览均统一由此弹出。
         UpdatePrompt(container)
+        }
+    }
+}
+
+@Composable
+private fun ClipboardLinkBanner(
+    link: ExternalVideoLink?,
+    bottomInset: Dp,
+    onOpen: (ExternalVideoLink) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(link) {
+        if (link == null) return@LaunchedEffect
+        delay(8_000L)
+        onDismiss()
+    }
+    AnimatedVisibility(
+        visible = link != null,
+        modifier = modifier.padding(start = 16.dp, end = 16.dp, bottom = bottomInset),
+        enter = slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(180)),
+        exit = slideOutVertically(tween(180)) { it / 2 } + fadeOut(tween(150)),
+    ) {
+        val current = link ?: return@AnimatedVisibility
+        val scheme = COUITheme.colorScheme
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            insideMargin = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            onClick = { onOpen(current) },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "检测到剪贴板中的 B 站链接",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = scheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (current.displayLabel.isNotBlank()) {
+                        Text(
+                            text = current.displayLabel,
+                            fontSize = 12.sp,
+                            color = scheme.onSurfaceSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    text = "忽略",
+                    fontSize = 13.sp,
+                    color = scheme.onSurfaceSecondary,
+                    modifier = Modifier
+                        .clip(SquircleShape(14.dp))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    text = "打开",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = scheme.onPrimary,
+                    modifier = Modifier
+                        .clip(SquircleShape(14.dp))
+                        .background(scheme.primary)
+                        .clickable { onOpen(current) }
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+            }
         }
     }
 }

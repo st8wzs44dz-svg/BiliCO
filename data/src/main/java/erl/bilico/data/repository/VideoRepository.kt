@@ -30,19 +30,24 @@ class VideoRepository(
      * 短链点开后先跟着跳转走，从最终地址里取出 BV 号。
      * 取不到就返回 null，调用方再交给浏览器。
      */
-    suspend fun resolveShortLink(url: String): String? = withContext(Dispatchers.IO) {
+    suspend fun resolveRedirectUrl(url: String): String? = withContext(Dispatchers.IO) {
         val target = url.trim()
         if (!target.startsWith("http", ignoreCase = true)) return@withContext null
         runCatching {
             buvid.ensure()
-            val client = okHttp.newBuilder().followRedirects(true).build()
+            val client = okHttp.newBuilder()
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .build()
             val request = Request.Builder().url(target).get().build()
             client.newCall(request).execute().use { response ->
-                val landed = response.request.url.toString()
-                BvidInUrl.find(landed)?.value
+                response.request.url.toString()
             }
         }.getOrNull()
     }
+
+    suspend fun resolveShortLink(url: String): String? =
+        resolveRedirectUrl(url)?.let { landed -> BvidInUrl.find(landed)?.value }
 
     suspend fun detail(bvid: String): Result<VideoDetail> = withContext(Dispatchers.IO) {
         runCatching {

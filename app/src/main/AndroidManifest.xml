@@ -42,12 +42,30 @@
                 <data android:host="www.bilibili.com" />
                 <data android:host="m.bilibili.com" />
                 <data android:pathPrefix="/video/" />
+                <data android:pathPrefix="/bangumi/play/" />
+                <data android:pathPrefix="/s/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="b23.tv" />
+                <data android:host="bili2233.cn" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="bilibili" android:host="video" />
+                <data android:scheme="bilibili" android:host="story" />
+                <data android:scheme="bilibili" android:host="bangumi" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 
