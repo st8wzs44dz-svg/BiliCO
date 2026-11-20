@@ -121,7 +121,7 @@ fun LiveListScreen(
         modifier = Modifier.fillMaxSize(),
         state = pullState,
         contentPadding = PaddingValues(top = contentTop),
-        colors = fullPagePullToRefreshColors(backgroundColor = pageContainerColor()),
+        colors = fullPagePullToRefreshColors(backgroundColor = androidx.compose.ui.graphics.Color.Transparent),
         refreshTexts = FullPageRefreshTexts,
         completeHoldDurationMillis = FullPageRefreshHoldMillis,
     ) {

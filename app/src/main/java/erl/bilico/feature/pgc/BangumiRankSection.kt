@@ -153,12 +153,10 @@ fun BangumiRankSection(
         FullPagePullToRefresh(
             isRefreshing = state.isRefreshing,
             onRefresh = { scope.launch { viewModel.refresh() } },
-            modifier = Modifier
-                .fillMaxSize()
-                .background(BangumiCinemaBackground),
+            modifier = Modifier.fillMaxSize(),
             state = pullState,
             contentPadding = PaddingValues(top = topInset + FeedSegmentRowHeight),
-            colors = fullPagePullToRefreshColors(backgroundColor = BangumiCinemaBackground),
+            colors = fullPagePullToRefreshColors(backgroundColor = Color.Transparent),
             refreshTexts = FullPageRefreshTexts,
             completeHoldDurationMillis = FullPageRefreshHoldMillis,
         ) {

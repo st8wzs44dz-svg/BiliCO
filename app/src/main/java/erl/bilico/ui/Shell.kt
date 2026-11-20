@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -84,7 +83,6 @@ import io.github.suqi8.coui.kmp.basic.rememberSearchResultsTransitionState
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
-import io.github.suqi8.coui.kmp.theme.darkColorScheme
 import kotlin.math.abs
 
 /** 底栏切页的交叉淡入时长。 */
@@ -244,20 +242,22 @@ fun MainShell(nav: NavState, container: AppContainer) {
     SideEffect { if (!enteringOverMain) settledOrbVisible = rawOrbVisible }
 
     val userIsDark = isDarkTheme(userDarkMode)
-    val userColors = COUITheme.colorScheme
-    val darkColors = remember { darkColorScheme() }
     val userPageBg = pageContainerColor()
     val tabBangumiWeight = animateFloatAsState(
         targetValue = if (tab == FEED_TAB_INDEX && !feedPanelCovering) 1f else 0f,
         animationSpec = tween(MainTabFadeMillis),
         label = "bangumiTabWeight",
     )
-    // 连续跟手进度：横滑番剧页逐帧随位置过渡，底栏切换与搜索展开按 220ms 同频淡变。
-    val bangumiProgress by remember(feedPager) {
-        derivedStateOf {
-            val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
-            (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) * tabBangumiWeight.value
-        }
+    // 仅在 graphicsLayer 绘制阶段读取连续进度，横滑与切 Tab 全程纯 GPU alpha 混合、零逐帧重组。
+    val bangumiProgress: () -> Float = {
+        val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
+        (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) * tabBangumiWeight.value
+    }
+    val showBaseChrome by remember(feedPager, userIsDark) {
+        derivedStateOf { userIsDark || bangumiProgress() < 0.999f }
+    }
+    val showDarkChrome by remember(feedPager, userIsDark) {
+        derivedStateOf { !userIsDark && bangumiProgress() > 0.001f }
     }
     val bangumiBarsDark by remember(feedPager, tab, feedPanelCovering) {
         derivedStateOf {
@@ -276,24 +276,28 @@ fun MainShell(nav: NavState, container: AppContainer) {
         onDispose { nav.mainForceDark = false }
     }
 
-    val chromeColors = if (userIsDark || bangumiProgress <= 0.001f) {
-        userColors
-    } else {
-        lerpColors(userColors, darkColors, bangumiProgress)
-    }
-    val chromeBgColor = lerp(userPageBg, BangumiCinemaBackground, bangumiProgress)
+    val baseChromeAlpha: () -> Float = { if (userIsDark) 1f else (1f - bangumiProgress()) }
+    val darkChromeAlpha: () -> Float = bangumiProgress
+    val baseReportsBounds = !showDarkChrome || !bangumiBarsDark
+    val darkReportsBounds = showDarkChrome && bangumiBarsDark
 
     Box(Modifier.fillMaxSize()) {
-        // Layer 1: 页面主内容。保持用户原有全局主题，避免横滑进出番剧时把邻居页闪黑或触发整树重组。
+        // Layer 1: 页面主内容。保持用户原有全局主题，底层用纯 GPU 影院暗幕无缝渐暗，消除横滑黑白硬切竖缝。
         CompositionLocalProvider(LocalTopBarBounds provides topBarBounds) {
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer {}
                     .layerBackdropIf(BlurEffectsEnabled, backdrop)
-                    .background(chromeBgColor)
+                    .background(userPageBg)
                     .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
             ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = bangumiProgress() }
+                        .background(BangumiCinemaBackground),
+                )
                 Crossfade(
                     targetState = tab,
                     animationSpec = tween(MainTabFadeMillis),
@@ -336,8 +340,8 @@ fun MainShell(nav: NavState, container: AppContainer) {
             }
         }
 
-        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（仅对轻量外壳层做连续颜色插值，跟手 120fps 平滑过渡）
-        COUITheme(colors = chromeColors) {
+        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（浅/深两套纯净外壳纯 GPU Alpha 叠化，无 luminance 材质跳变）
+        val renderUnderlay: @Composable (Color, () -> Float, Boolean) -> Unit = { containerColor, alphaProvider, reportBounds ->
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
                 LocalEdgeToEdge provides true,
@@ -361,16 +365,29 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         searchExpanded = searchExpanded,
                         panelCovering = feedPanelCovering,
                         bounds = topBarBounds,
-                        containerColor = chromeBgColor,
-                        modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().graphicsLayer {},
+                        reportBounds = reportBounds,
+                        containerColor = containerColor,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .graphicsLayer { alpha = alphaProvider() }
+                            .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
                     )
                 }
             }
         }
+        if (showBaseChrome) {
+            renderUnderlay(userPageBg, baseChromeAlpha, baseReportsBounds)
+        }
+        if (showDarkChrome) {
+            BiliCoTheme(darkMode = 2) {
+                renderUnderlay(BangumiCinemaBackground, darkChromeAlpha, darkReportsBounds)
+            }
+        }
 
-        // Layer 3: 悬浮底部导航栏（在搜索面板之下，展开时被面板盖住）
+        // Layer 3: 悬浮底部导航栏（同样纯 GPU Alpha 双层叠化，稳态仅挂载单层）
         val context = LocalContext.current
-        COUITheme(colors = chromeColors) {
+        val renderBottomBar: @Composable (() -> Float, Boolean) -> Unit = { alphaProvider, reportBounds ->
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
                 LocalPlatformBottomBarMaterialEnabled provides false,
@@ -390,7 +407,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         onPrimaryReselect = {
                             if (!feedPanelCovering) feedPrimaryTapTick++
                         },
-                        barBounds = topBarBounds,
+                        barBounds = if (reportBounds) topBarBounds else null,
                         orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
                         leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
                         onLeftOrbClick = {
@@ -398,7 +415,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
                                 if (account == null) nav.push(Route.Login) else dynamicComposerOpen = true
                             }
                         },
-                        orbOrigin = nav.orbOrigin,
+                        orbOrigin = if (reportBounds) nav.orbOrigin else null,
                         orbArtworkUrl = PlaybackBridge.currentArtworkUrl,
                         orbIsPlaying = PlaybackBridge.currentIsPlaying && onMainTab,
                         onOrbClick = { if (!feedPanelCovering) nav.restoreMinimized() },
@@ -406,10 +423,24 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         onOrbStop = { nav.dismissMinimized(pausePlayback = true) },
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .graphicsLayer {}
-                            .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
+                            .graphicsLayer { alpha = alphaProvider() }
+                            .then(
+                                if (feedPanelCovering || !reportBounds) {
+                                    Modifier.clearAndSetSemantics {}
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     )
                 }
+            }
+        }
+        if (showBaseChrome) {
+            renderBottomBar(baseChromeAlpha, baseReportsBounds)
+        }
+        if (showDarkChrome) {
+            BiliCoTheme(darkMode = 2) {
+                renderBottomBar(darkChromeAlpha, darkReportsBounds)
             }
         }
 
@@ -446,7 +477,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
         }
 
         // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
-        COUITheme(colors = chromeColors) {
+        val renderTitleRow: @Composable (() -> Float, Boolean) -> Unit = { alphaProvider, reportBounds ->
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) {
                     if (feedPanelCovering) searchBackdrop else backdrop
@@ -475,11 +506,18 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
-                            .graphicsLayer {}
-                            .then(if (feedPanelCovering) Modifier.reportTopBarBottom(topBarBounds) else Modifier),
+                            .graphicsLayer { alpha = alphaProvider() }
+                            .then(
+                                if (reportBounds && feedPanelCovering) {
+                                    Modifier.reportTopBarBottom(topBarBounds)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
                     )
                     // 排序圆钮的菜单宿主：圆钮画在 FeedTitleRow 的胶囊行里，这里只把锚点落到它身上。
-                    if (feedPanelCovering && showingResults) {
+                    if (reportBounds && feedPanelCovering && showingResults) {
                         SearchSortMenuHost(
                             expanded = sortMenuExpanded,
                             onExpandedChange = { sortMenuExpanded = it },
@@ -489,6 +527,14 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         )
                     }
                 }
+            }
+        }
+        if (showBaseChrome) {
+            renderTitleRow(baseChromeAlpha, baseReportsBounds)
+        }
+        if (showDarkChrome) {
+            BiliCoTheme(darkMode = 2) {
+                renderTitleRow(darkChromeAlpha, darkReportsBounds)
             }
         }
 
@@ -523,6 +569,7 @@ private fun MainBarUnderlay(
     searchExpanded: Boolean,
     panelCovering: Boolean,
     bounds: TopBarBounds,
+    reportBounds: Boolean,
     containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
@@ -538,7 +585,7 @@ private fun MainBarUnderlay(
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(0, 0) }
-                .then(if (panelCovering) Modifier else Modifier.reportTopBarBottom(bounds)),
+                .then(if (panelCovering || !reportBounds) Modifier else Modifier.reportTopBarBottom(bounds)),
             containerColor = containerColor,
             scrollFraction = { 1f },
         ) {

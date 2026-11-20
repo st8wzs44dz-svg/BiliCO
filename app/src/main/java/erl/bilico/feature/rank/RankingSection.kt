@@ -138,7 +138,7 @@ fun RankingSection(
         modifier = Modifier.fillMaxSize(),
         state = pullState,
         contentPadding = PaddingValues(top = topInset + FeedSegmentRowHeight),
-        colors = fullPagePullToRefreshColors(backgroundColor = pageContainerColor()),
+        colors = fullPagePullToRefreshColors(backgroundColor = androidx.compose.ui.graphics.Color.Transparent),
         refreshTexts = FullPageRefreshTexts,
         completeHoldDurationMillis = FullPageRefreshHoldMillis,
     ) {
