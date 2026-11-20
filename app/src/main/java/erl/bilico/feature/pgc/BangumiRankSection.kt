@@ -1,5 +1,7 @@
 package erl.bilico.feature.pgc
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,6 +58,7 @@ import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.feed.FeedSegmentRowHeight
 import erl.bilico.feature.feed.HandleFeedPrimaryTap
+import erl.bilico.ui.BangumiCinemaBackground
 import erl.bilico.ui.BiliCoTheme
 import erl.bilico.ui.NavState
 import erl.bilico.ui.Route
@@ -77,7 +80,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val BangumiCinemaBackground = Color(0xFF141414)
 private val BangumiPosterPlaceholder = Color(0xFF1E1E22)
 private val BangumiPosterRadius = 14.dp
 private val BangumiRatingColor = Color(0xFFFFB74D)
@@ -93,6 +95,7 @@ fun BangumiRankSection(
     onCollapse: (Float) -> Unit,
     refreshTick: Int,
     primaryTapTick: Int = 0,
+    pagerScrolling: Boolean = false,
 ) {
     val viewModel: BangumiRankViewModel = viewModel { BangumiRankViewModel(container.pgc) }
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -198,7 +201,7 @@ fun BangumiRankSection(
                         card = card,
                         coverWidthPx = coverWidthPx,
                         coverHeightPx = coverHeightPx,
-                        generateBlur = active && visible,
+                        generateBlur = active && visible && !pagerScrolling,
                         onClick = { nav.push(Route.Pgc(card.seasonId, 0L)) },
                     )
                 }
@@ -235,6 +238,11 @@ internal fun BangumiRankCard(
         infoHeight = infoHeight,
         generateBlur = generateBlur,
     )
+    val blurAlpha by animateFloatAsState(
+        targetValue = if (posterBlur != null) 1f else 0f,
+        animationSpec = tween(160),
+        label = "bangumiPosterBlurAlpha",
+    )
     val cardShape = remember { SquircleShape(BangumiPosterRadius) }
     val fadePx = with(density) { BangumiPosterBlurFade.roundToPx() }
     val scrimHeightDp = with(density) {
@@ -264,7 +272,7 @@ internal fun BangumiRankCard(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            if (posterBlur != null && infoHeight > 0 && cardSize.height > 0) {
+            if (posterBlur != null && blurAlpha > 0.01f && infoHeight > 0 && cardSize.height > 0) {
                 Canvas(Modifier.matchParentSize()) {
                     val blurHeight = (infoHeight + fadePx).coerceAtMost(size.height.roundToInt())
                     val top = (size.height.roundToInt() - blurHeight).coerceAtLeast(0)
@@ -273,6 +281,7 @@ internal fun BangumiRankCard(
                             image = posterBlur,
                             dstOffset = IntOffset(0, top),
                             dstSize = IntSize(size.width.roundToInt(), blurHeight),
+                            alpha = blurAlpha,
                             filterQuality = FilterQuality.Low,
                         )
                     }

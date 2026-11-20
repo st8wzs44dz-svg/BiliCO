@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -43,7 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -81,6 +84,7 @@ import io.github.suqi8.coui.kmp.basic.rememberSearchResultsTransitionState
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import io.github.suqi8.coui.kmp.theme.darkColorScheme
 import kotlin.math.abs
 
 /** 底栏切页的交叉淡入时长。 */
@@ -239,69 +243,101 @@ fun MainShell(nav: NavState, container: AppContainer) {
     var settledOrbVisible by remember { mutableStateOf(rawOrbVisible) }
     SideEffect { if (!enteringOverMain) settledOrbVisible = rawOrbVisible }
 
-    val inBangumiSegment by remember(tab, feedPager, feedPanelCovering) {
-        derivedStateOf { tab == FEED_TAB_INDEX && feedPager.targetPage == 2 && !feedPanelCovering }
+    val userIsDark = isDarkTheme(userDarkMode)
+    val userColors = COUITheme.colorScheme
+    val darkColors = remember { darkColorScheme() }
+    val userPageBg = pageContainerColor()
+    val tabBangumiWeight = animateFloatAsState(
+        targetValue = if (tab == FEED_TAB_INDEX && !feedPanelCovering) 1f else 0f,
+        animationSpec = tween(MainTabFadeMillis),
+        label = "bangumiTabWeight",
+    )
+    // 连续跟手进度：横滑番剧页逐帧随位置过渡，底栏切换与搜索展开按 220ms 同频淡变。
+    val bangumiProgress by remember(feedPager) {
+        derivedStateOf {
+            val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
+            (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) * tabBangumiWeight.value
+        }
     }
-    SideEffect { nav.mainForceDark = inBangumiSegment }
+    val bangumiBarsDark by remember(feedPager, tab, feedPanelCovering) {
+        derivedStateOf {
+            if (tab != FEED_TAB_INDEX || feedPanelCovering) {
+                false
+            } else {
+                val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
+                (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) >= 0.5f
+            }
+        }
+    }
+    LaunchedEffect(bangumiBarsDark) {
+        nav.mainForceDark = bangumiBarsDark
+    }
     DisposableEffect(nav) {
         onDispose { nav.mainForceDark = false }
     }
 
-    BiliCoTheme(darkMode = if (inBangumiSegment) 2 else userDarkMode) {
-        Box(Modifier.fillMaxSize()) {
-            // Layer 1: 页面主内容。单独一层 RenderNode：下面几层的模糊、弹簧动画不会带着整页一起重录。
-            CompositionLocalProvider(LocalTopBarBounds provides topBarBounds) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {}
-                        .layerBackdropIf(BlurEffectsEnabled, backdrop)
-                        .background(pageContainerColor())
-                        .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
-                ) {
-                    Crossfade(
-                        targetState = tab,
-                        animationSpec = tween(MainTabFadeMillis),
-                        modifier = Modifier.fillMaxSize(),
-                        label = "mainTabPage",
-                    ) { page ->
-                        holder.SaveableStateProvider(page) {
-                            when (page) {
-                                0 -> FeedScreen(
-                                    container = container,
-                                    nav = nav,
-                                    topInset = topBarHeight,
-                                    segment = segment,
-                                    onSegment = { segment = it },
-                                    onCollapse = { feedCollapse = it },
-                                    pagerState = feedPager,
-                                    refreshTick = feedRefreshTick,
-                                    primaryTapTick = feedPrimaryTapTick,
-                                )
+    val chromeColors = if (userIsDark || bangumiProgress <= 0.001f) {
+        userColors
+    } else {
+        lerpColors(userColors, darkColors, bangumiProgress)
+    }
+    val chromeBgColor = lerp(userPageBg, BangumiCinemaBackground, bangumiProgress)
 
-                                1 -> DynamicScreen(
-                                    container = container,
-                                    nav = nav,
-                                    topInset = topBarHeight,
-                                    filterIndex = dynamicFilterIndex,
-                                    onFilterSelect = { dynamicFilterIndex = it },
-                                    pagerState = dynamicPager,
-                                    onCollapse = { dynamicCollapse = it },
-                                    refreshTick = dynamicRefreshTick,
-                                )
+    Box(Modifier.fillMaxSize()) {
+        // Layer 1: 页面主内容。保持用户原有全局主题，避免横滑进出番剧时把邻居页闪黑或触发整树重组。
+        CompositionLocalProvider(LocalTopBarBounds provides topBarBounds) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {}
+                    .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                    .background(chromeBgColor)
+                    .then(if (feedPanelCovering) Modifier.clearAndSetSemantics {} else Modifier),
+            ) {
+                Crossfade(
+                    targetState = tab,
+                    animationSpec = tween(MainTabFadeMillis),
+                    modifier = Modifier.fillMaxSize(),
+                    label = "mainTabPage",
+                ) { page ->
+                    holder.SaveableStateProvider(page) {
+                        when (page) {
+                            0 -> FeedScreen(
+                                container = container,
+                                nav = nav,
+                                topInset = topBarHeight,
+                                segment = segment,
+                                onSegment = { segment = it },
+                                onCollapse = { feedCollapse = it },
+                                pagerState = feedPager,
+                                refreshTick = feedRefreshTick,
+                                primaryTapTick = feedPrimaryTapTick,
+                            )
 
-                                else -> MeScreen(
-                                    container = container,
-                                    nav = nav,
-                                    topInset = topBarHeight,
-                                )
-                            }
+                            1 -> DynamicScreen(
+                                container = container,
+                                nav = nav,
+                                topInset = topBarHeight,
+                                filterIndex = dynamicFilterIndex,
+                                onFilterSelect = { dynamicFilterIndex = it },
+                                pagerState = dynamicPager,
+                                onCollapse = { dynamicCollapse = it },
+                                refreshTick = dynamicRefreshTick,
+                            )
+
+                            else -> MeScreen(
+                                container = container,
+                                nav = nav,
+                                topInset = topBarHeight,
+                            )
                         }
                     }
                 }
             }
+        }
 
-            // Layer 2: 顶栏模糊材质层 + 分段胶囊行（在搜索面板之下，展开时会被面板盖住）
+        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（仅对轻量外壳层做连续颜色插值，跟手 120fps 平滑过渡）
+        COUITheme(colors = chromeColors) {
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
                 LocalEdgeToEdge provides true,
@@ -325,13 +361,16 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         searchExpanded = searchExpanded,
                         panelCovering = feedPanelCovering,
                         bounds = topBarBounds,
+                        containerColor = chromeBgColor,
                         modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().graphicsLayer {},
                     )
                 }
             }
+        }
 
-            // Layer 3: 悬浮底部导航栏（在搜索面板之下，展开时被面板盖住）
-            val context = LocalContext.current
+        // Layer 3: 悬浮底部导航栏（在搜索面板之下，展开时被面板盖住）
+        val context = LocalContext.current
+        COUITheme(colors = chromeColors) {
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
                 LocalPlatformBottomBarMaterialEnabled provides false,
@@ -351,6 +390,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
                         onPrimaryReselect = {
                             if (!feedPanelCovering) feedPrimaryTapTick++
                         },
+                        barBounds = topBarBounds,
                         orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
                         leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
                         onLeftOrbClick = {
@@ -371,40 +411,42 @@ fun MainShell(nav: NavState, container: AppContainer) {
                     )
                 }
             }
+        }
 
-            // Layer 4: 首页搜索整屏面板（从屏幕顶 0 铺满到屏幕底部，位于常态顶栏与底栏之上、搜索胶囊之下）
-            if (feedPanelCovering) {
-                HomeSearchOverlay(
-                    topBarHeight = topBarHeight,
-                    searchBackdrop = searchBackdrop,
-                    searchExpanded = searchExpanded,
-                    panelProgress = { panelProgress.value },
-                    panelAlpha = { panelAlpha.value },
-                    state = searchState,
-                    transitionState = searchTransition,
-                    history = searchHistory,
-                    viewModel = searchViewModel,
-                    container = container,
-                    nav = nav,
-                    barBounds = topBarBounds,
-                    onSelectKeyword = submitHomeSearch,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+        // Layer 4: 首页搜索整屏面板（从屏幕顶 0 铺满到屏幕底部，位于常态顶栏与底栏之上、搜索胶囊之下）
+        if (feedPanelCovering) {
+            HomeSearchOverlay(
+                topBarHeight = topBarHeight,
+                searchBackdrop = searchBackdrop,
+                searchExpanded = searchExpanded,
+                panelProgress = { panelProgress.value },
+                panelAlpha = { panelAlpha.value },
+                state = searchState,
+                transitionState = searchTransition,
+                history = searchHistory,
+                viewModel = searchViewModel,
+                container = container,
+                nav = nav,
+                barBounds = topBarBounds,
+                onSelectKeyword = submitHomeSearch,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
-            // Layer 4.5: 搜索面板之上的融合球。面板铺满整屏，会盖住底栏上的那颗，
-            // 从搜索结果的视频返回时球就被面板吞掉。这里补一颗，面板收起后交还底栏那颗。
-            if (feedPanelCovering && (nav.minimizedEntry != null || nav.isMinimizingToOrb)) {
-                nav.orbOrigin?.let { origin ->
-                    CompositionLocalProvider(
-                        LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-                    ) {
-                        SecondaryPlaybackOrbOverlay(nav = nav, orbOrigin = origin)
-                    }
+        // Layer 4.5: 搜索面板之上的融合球。面板铺满整屏，会盖住底栏上的那颗，
+        // 从搜索结果的视频返回时球就被面板吞掉。这里补一颗，面板收起后交还底栏那颗。
+        if (feedPanelCovering && (nav.minimizedEntry != null || nav.isMinimizingToOrb)) {
+            nav.orbOrigin?.let { origin ->
+                CompositionLocalProvider(
+                    LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                ) {
+                    SecondaryPlaybackOrbOverlay(nav = nav, orbOrigin = origin)
                 }
             }
+        }
 
-            // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
+        // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
+        COUITheme(colors = chromeColors) {
             CompositionLocalProvider(
                 LocalBackdrop provides if (BlurEffectsEnabled) {
                     if (feedPanelCovering) searchBackdrop else backdrop
@@ -448,14 +490,14 @@ fun MainShell(nav: NavState, container: AppContainer) {
                     }
                 }
             }
-
-            DynamicPublishOverlay(
-                container = container,
-                composerOpen = dynamicComposerOpen,
-                onDismissComposer = { dynamicComposerOpen = false },
-                onPublished = { dynamicRefreshTick++ },
-            )
         }
+
+        DynamicPublishOverlay(
+            container = container,
+            composerOpen = dynamicComposerOpen,
+            onDismissComposer = { dynamicComposerOpen = false },
+            onPublished = { dynamicRefreshTick++ },
+        )
     }
 
     val inHomeSearchResults =
@@ -481,6 +523,7 @@ private fun MainBarUnderlay(
     searchExpanded: Boolean,
     panelCovering: Boolean,
     bounds: TopBarBounds,
+    containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -496,7 +539,7 @@ private fun MainBarUnderlay(
                 .fillMaxWidth()
                 .offset { IntOffset(0, 0) }
                 .then(if (panelCovering) Modifier else Modifier.reportTopBarBottom(bounds)),
-            containerColor = pageContainerColor(),
+            containerColor = containerColor,
             scrollFraction = { 1f },
         ) {
             Box(

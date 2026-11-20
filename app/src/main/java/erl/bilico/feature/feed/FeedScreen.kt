@@ -102,6 +102,7 @@ fun FeedScreen(
                     onCollapse = onCollapse,
                     refreshTick = refreshTick,
                     primaryTapTick = primaryTapTick,
+                    pagerScrolling = pagerState.isScrollInProgress,
                 )
 
                 3 -> LiveListScreen(
