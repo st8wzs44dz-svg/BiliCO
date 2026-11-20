@@ -1,8 +1,11 @@
 package erl.bilico.data.session
 
 import android.content.Context
+import android.net.Uri
+import android.util.Log
 import android.webkit.CookieManager
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import erl.bilico.data.biliDataStore
 import erl.bilico.data.model.Account
@@ -39,7 +42,8 @@ class SessionRepository(
     private val scope: CoroutineScope,
 ) {
     private val accounts = AccountStore(context, scope)
-    private val accessTokenMutex = Mutex()
+    private val tokenMutex = Mutex()
+    private val tvQrKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private val _account = MutableStateFlow<Account?>(null)
     val account: StateFlow<Account?> = _account.asStateFlow()
@@ -69,6 +73,28 @@ class SessionRepository(
     fun webCookies(): Map<String, String> = cookies.snapshot()
 
     suspend fun generateQr(): Result<QrLogin> = runCatching {
+        // 优先走 TV/App 端二维码授权：手机扫码确认后可同时获得 SESSDATA/bili_jct 与 App access_token，
+        // 让「我不想看」等需要 access_key 的推荐偏好也能直接同步到 B 站服务器。
+        val tvAttempt = runCatching {
+            val params = AppSignUtils.signForAndroidQrLogin(
+                mapOf(
+                    "local_id" to "0",
+                    "mobi_app" to "android",
+                    "platform" to "android",
+                    "ts" to AppSignUtils.getTimestamp().toString(),
+                ),
+            )
+            val tvResp = passportApi.generateTvAuthCode(params)
+            val tvData = tvResp.data
+            if (tvResp.code == 0 && tvData != null && tvData.authCode.isNotBlank() && tvData.url.isNotBlank()) {
+                tvQrKeys.add(tvData.authCode)
+                QrLogin(key = tvData.authCode, url = tvData.url)
+            } else {
+                null
+            }
+        }.getOrNull()
+        if (tvAttempt != null) return@runCatching tvAttempt
+
         val response = passportApi.generateQrCode()
         if (response.code != 0) error(response.message.ifBlank { "二维码获取失败(${response.code})" })
         val data = response.data ?: error("二维码数据为空")
@@ -78,6 +104,44 @@ class SessionRepository(
     }
 
     suspend fun pollQr(key: String): Result<Pair<QrLoginState, QrPollData?>> = runCatching {
+        if (key in tvQrKeys) {
+            val pollParams = AppSignUtils.signForAndroidQrLogin(
+                mapOf(
+                    "auth_code" to key,
+                    "local_id" to "0",
+                    "ts" to AppSignUtils.getTimestamp().toString(),
+                ),
+            )
+            val pollResp = passportApi.pollTvQrCode(pollParams)
+            val data = pollResp.data
+            val state = when (pollResp.code) {
+                0 -> QrLoginState.SUCCESS
+                86090 -> QrLoginState.SCANNED
+                86038 -> QrLoginState.EXPIRED
+                else -> QrLoginState.WAITING
+            }
+            if (state == QrLoginState.SUCCESS && data != null) {
+                tvQrKeys.remove(key)
+                val cookieMap = data.cookieInfo?.cookies.orEmpty()
+                    .filter { it.name.isNotBlank() && it.value.isNotBlank() }
+                    .associate { it.name to it.value }
+                if (cookieMap.isNotEmpty()) cookies.putAll(cookieMap)
+                buvid.ensure()
+                val ownerMid = data.mid.takeIf { it > 0L } ?: mid()
+                if (data.accessToken.isNotBlank()) {
+                    saveTokens(data.accessToken, data.refreshToken, ownerMid)
+                }
+                refreshProfile()?.let { upsertCurrentSession(it) }
+            } else if (state == QrLoginState.EXPIRED) {
+                tvQrKeys.remove(key)
+            }
+            return@runCatching state to QrPollData(
+                refreshToken = data?.refreshToken,
+                code = pollResp.code,
+                message = pollResp.message,
+            )
+        }
+
         val response = passportApi.pollQrCode(key)
         val data = response.data
         val state = when (data?.code) {
@@ -87,7 +151,7 @@ class SessionRepository(
             else -> QrLoginState.WAITING
         }
         if (state == QrLoginState.SUCCESS) {
-            clearTokens()
+            seedMissingAuthCookiesFromUrl(data?.url)
             buvid.ensure()
             refreshProfile()?.let { upsertCurrentSession(it) }
         }
@@ -98,7 +162,6 @@ class SessionRepository(
     suspend fun loginWithCookies(cookieMap: Map<String, String>): Result<Account> = runCatching {
         val sessData = cookieMap["SESSDATA"]?.trim().orEmpty()
         require(sessData.isNotEmpty()) { "未检测到登录凭证（SESSDATA）" }
-        clearTokens()
         cookies.putAll(cookieMap)
         buvid.ensure()
         val account = refreshProfile() ?: error("读取账号信息失败，请重试")
@@ -156,11 +219,6 @@ class SessionRepository(
         if (target.cookies.isEmpty()) return false
         upsertCurrentSession()
         cookies.replaceAll(target.cookies)
-        if (target.accessToken.isNotBlank()) {
-            saveTokens(target.accessToken, target.refreshToken)
-        } else {
-            clearTokens()
-        }
         val account = refreshProfile()
         if (account == null || account.mid != mid) {
             // 目标会话已失效：Cookie 已经换掉了，只能按退出处理，避免停在半登录态。
@@ -179,130 +237,198 @@ class SessionRepository(
         accounts.write(_sessions.value)
     }
 
-    /** 把当前 Cookie 连同画像与 App token 存进名册；同一个 mid 覆盖旧的一份并排到最前。 */
+    /** 把当前 Cookie 连同画像存进名册；同一个 mid 覆盖旧的一份并排到最前。 */
     private suspend fun upsertCurrentSession(account: Account? = _account.value) {
         val current = account ?: return
         val snapshot = cookies.snapshot()
-        if (snapshot.isEmpty()) return
-        val (accessToken, refreshToken) = readTokens()
+        if (snapshot["SESSDATA"].isNullOrBlank()) return
         val stored = StoredSession(
             mid = current.mid,
             name = current.name,
             face = current.face,
             cookies = snapshot,
             savedAt = System.currentTimeMillis(),
-            accessToken = accessToken.orEmpty(),
-            refreshToken = refreshToken.orEmpty(),
         )
         _sessions.value = (listOf(stored) + _sessions.value.filterNot { it.mid == current.mid })
             .take(MAX_STORED_ACCOUNTS)
         accounts.write(_sessions.value)
     }
 
-    /**
-     * 获取当前账号的 App 端 `access_key`：
-     * 优先读本地缓存；缺失或要求强制刷新时，尝试刷新或用当前 Web Cookie 静默换取（参考 PiliPlus）。
-     */
-    suspend fun ensureAccessToken(forceRefresh: Boolean = false): String? = withContext(Dispatchers.IO) {
-        accessTokenMutex.withLock {
-            if (!isLoggedIn()) return@withLock null
-            val (cachedAccess, cachedRefresh) = readTokens()
-            if (!forceRefresh && !cachedAccess.isNullOrBlank()) {
-                return@withLock cachedAccess
-            }
-
-            if (forceRefresh && !cachedAccess.isNullOrBlank() && !cachedRefresh.isNullOrBlank()) {
-                val refreshed = runCatching {
-                    passportApi.refreshToken(
-                        AppSignUtils.signForAndroidHdApi(
-                            mapOf(
-                                "access_key" to cachedAccess,
-                                "refresh_token" to cachedRefresh,
-                            ),
-                        ),
-                    )
-                }.getOrNull()
-                val refreshedData = refreshed?.data
-                if (refreshed?.code == 0 && refreshedData != null && refreshedData.accessToken.isNotBlank()) {
-                    saveTokens(refreshedData.accessToken, refreshedData.refreshToken)
-                    upsertCurrentSession()
-                    return@withLock refreshedData.accessToken
-                }
-            }
-
-            val biliJct = csrf()
-            if (biliJct.isBlank()) return@withLock null
-
-            val exchanged = runCatching {
-                val authResp = passportApi.generateTvQrCode(
-                    AppSignUtils.signForAndroidHdApi(
-                        mapOf(
-                            "local_id" to "0",
-                            "platform" to "android",
-                            "mobi_app" to "android_hd",
-                        ),
-                    ),
-                )
-                val authCode = authResp.data?.authCode?.takeIf { authResp.code == 0 && it.isNotBlank() }
-                    ?: return@runCatching null
-
-                val confirmResp = passportApi.confirmTvQrCode(
-                    mapOf(
-                        "auth_code" to authCode,
-                        "csrf" to biliJct,
-                        "scanning_type" to "1",
-                    ),
-                )
-                if (confirmResp.code != 0) return@runCatching null
-
-                val pollResp = passportApi.pollTvQrCode(
-                    AppSignUtils.signForAndroidHdApi(
-                        mapOf(
-                            "auth_code" to authCode,
-                            "local_id" to "0",
-                        ),
-                    ),
-                )
-                val pollData = pollResp.data
-                if (pollResp.code != 0 || pollData == null || pollData.accessToken.isBlank()) {
-                    return@runCatching null
-                }
-                pollData.accessToken to pollData.refreshToken
-            }.getOrNull() ?: return@withLock null
-
-            saveTokens(exchanged.first, exchanged.second)
-            upsertCurrentSession()
-            exchanged.first
-        }
-    }
-
-    suspend fun saveTokens(accessToken: String, refreshToken: String) {
+    suspend fun saveTokens(
+        accessToken: String,
+        refreshToken: String,
+        ownerMid: Long = mid(),
+    ) {
         context.biliDataStore.edit {
             it[KEY_ACCESS_TOKEN] = accessToken
             it[KEY_REFRESH_TOKEN] = refreshToken
+            it[KEY_ACCESS_TOKEN_MID] = ownerMid
         }
     }
 
-    private suspend fun clearTokens() {
+    suspend fun clearTokens() {
         context.biliDataStore.edit {
             it.remove(KEY_ACCESS_TOKEN)
             it.remove(KEY_REFRESH_TOKEN)
+            it.remove(KEY_ACCESS_TOKEN_MID)
         }
     }
 
     suspend fun readTokens(): Pair<String?, String?> {
         val prefs = context.biliDataStore.data.first()
+        val storedMid = prefs[KEY_ACCESS_TOKEN_MID] ?: 0L
+        val currentMid = mid()
+        if (storedMid > 0L && currentMid > 0L && storedMid != currentMid) return null to null
         return prefs[KEY_ACCESS_TOKEN] to prefs[KEY_REFRESH_TOKEN]
+    }
+
+    /**
+     * 使用当前 Web 会话（SESSDATA + bili_jct）自动授权换取 TV/App 端 access_key，
+     * 让「我不想看」及 App 推荐流可以直接向服务器同步偏好，无需重复扫码。
+     */
+    suspend fun ensureAccessToken(): String? = withContext(Dispatchers.IO) {
+        tokenMutex.withLock {
+            val activeMid = mid().takeIf { it > 0L } ?: (_account.value?.mid ?: 0L)
+            val jct = csrf()
+            if (activeMid <= 0L || !isLoggedIn() || jct.isBlank()) return@withLock null
+            val prefs = context.biliDataStore.data.first()
+            val stored = prefs[KEY_ACCESS_TOKEN]
+            val storedMid = prefs[KEY_ACCESS_TOKEN_MID] ?: 0L
+            if (!stored.isNullOrBlank() && storedMid == activeMid) return@withLock stored
+
+            runCatching {
+                buvid.ensure()
+                val authParams = AppSignUtils.signForAndroidQrLogin(
+                    mapOf(
+                        "local_id" to "0",
+                        "mobi_app" to "android",
+                        "platform" to "android",
+                        "ts" to AppSignUtils.getTimestamp().toString(),
+                    ),
+                )
+                val codeResp = passportApi.generateTvAuthCode(authParams)
+                val authCode = codeResp.data?.authCode?.takeIf { codeResp.code == 0 && it.isNotBlank() }
+                if (authCode == null) {
+                    Log.w("BiliSession", "ensureAccessToken authCode failed code=${codeResp.code}")
+                    return@runCatching null
+                }
+                val confirmResp = passportApi.confirmTvQrCode(
+                    mapOf(
+                        "auth_code" to authCode,
+                        "build" to "7082000",
+                        "csrf" to jct,
+                    ),
+                )
+                if (confirmResp.code != 0) {
+                    Log.w("BiliSession", "ensureAccessToken confirm failed code=${confirmResp.code}")
+                    return@runCatching null
+                }
+                val pollParams = AppSignUtils.signForAndroidQrLogin(
+                    mapOf(
+                        "auth_code" to authCode,
+                        "local_id" to "0",
+                        "ts" to AppSignUtils.getTimestamp().toString(),
+                    ),
+                )
+                val pollResp = passportApi.pollTvQrCode(pollParams)
+                val data = pollResp.data?.takeIf { pollResp.code == 0 && it.accessToken.isNotBlank() }
+                if (data == null) {
+                    Log.w("BiliSession", "ensureAccessToken poll failed code=${pollResp.code}")
+                    return@runCatching null
+                }
+                saveTokens(data.accessToken, data.refreshToken, activeMid)
+                data.accessToken
+            }.getOrNull()
+        }
     }
 
     private suspend fun restore() {
         val prefs = context.biliDataStore.data.first()
-        prefs[KEY_ACCOUNT]?.let { raw ->
-            runCatching {
-                BiliClient.json.decodeFromString<Account>(raw)
-            }.getOrNull()?.let { _account.value = it }
+        val cachedAccount = prefs[KEY_ACCOUNT]?.let { raw ->
+            runCatching { BiliClient.json.decodeFromString<Account>(raw) }.getOrNull()
         }
-        if (isLoggedIn()) refreshProfile()?.let { upsertCurrentSession(it) }
+        recoverMissingAuthCookies(cachedAccount?.mid ?: 0L)
+        if (!isLoggedIn()) {
+            // Cookie 已不存在且无法从名册恢复时，清理残留画像，避免界面误判「已登录」而操作提示「登录后可用」。
+            _account.value = null
+            if (cachedAccount != null) {
+                context.biliDataStore.edit { it.remove(KEY_ACCOUNT) }
+            }
+            return
+        }
+        if (cachedAccount != null) {
+            _account.value = cachedAccount
+        }
+        refreshProfile()?.let { upsertCurrentSession(it) }
+    }
+
+    private fun seedMissingAuthCookiesFromUrl(url: String?) {
+        val rawUrl = url?.trim().orEmpty()
+        if (rawUrl.isEmpty()) return
+        val parsed = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return
+        val updates = buildMap {
+            for (name in AUTH_COOKIE_NAMES) {
+                if (cookies.get(name).isNullOrBlank()) {
+                    parsed.getQueryParameter(name)?.takeIf { it.isNotBlank() }?.let { put(name, it) }
+                }
+            }
+        }
+        if (updates.isNotEmpty()) {
+            cookies.putAll(updates)
+        }
+    }
+
+    private fun recoverMissingAuthCookies(preferredMid: Long) {
+        if (!cookies.get("SESSDATA").isNullOrBlank() && !cookies.get("bili_jct").isNullOrBlank()) return
+        val webCookies = readWebViewAuthCookies()
+        if (webCookies.isNotEmpty()) {
+            val missingFromWeb = webCookies.filterKeys { cookies.get(it).isNullOrBlank() }
+            if (missingFromWeb.isNotEmpty()) {
+                cookies.putAll(missingFromWeb)
+            }
+        }
+        if (!cookies.get("SESSDATA").isNullOrBlank() && !cookies.get("bili_jct").isNullOrBlank()) return
+        val targetMid = preferredMid.takeIf { it > 0L } ?: mid()
+        val stored = _sessions.value.firstOrNull { session ->
+            (targetMid <= 0L || session.mid == targetMid) &&
+                !session.cookies["SESSDATA"].isNullOrBlank()
+        } ?: return
+        val missingFromRoster = buildMap {
+            AUTH_COOKIE_NAMES.forEach { name ->
+                if (cookies.get(name).isNullOrBlank()) {
+                    stored.cookies[name]?.takeIf { it.isNotBlank() }?.let { put(name, it) }
+                }
+            }
+        }
+        if (missingFromRoster.isNotEmpty()) {
+            Log.i("BiliSession", "Recovered missing auth cookies from roster for mid=${stored.mid}")
+            cookies.putAll(missingFromRoster)
+        }
+    }
+
+    private fun readWebViewAuthCookies(): Map<String, String> {
+        val manager = runCatching { CookieManager.getInstance() }.getOrNull() ?: return emptyMap()
+        val result = LinkedHashMap<String, String>()
+        listOf(
+            "https://www.bilibili.com",
+            "https://passport.bilibili.com",
+            "https://api.bilibili.com",
+            "https://m.bilibili.com",
+        ).forEach { domainUrl ->
+            val raw = runCatching { manager.getCookie(domainUrl) }.getOrNull().orEmpty()
+            raw.split(';').forEach { segment ->
+                val trimmed = segment.trim()
+                val eq = trimmed.indexOf('=')
+                if (eq > 0) {
+                    val key = trimmed.substring(0, eq).trim()
+                    val value = trimmed.substring(eq + 1).trim()
+                    if (key in AUTH_COOKIE_NAMES && value.isNotEmpty()) {
+                        result[key] = value
+                    }
+                }
+            }
+        }
+        return result
     }
 
     private suspend fun persistAccount(account: Account) {
@@ -320,6 +446,7 @@ class SessionRepository(
             it.remove(KEY_ACCOUNT)
             it.remove(KEY_ACCESS_TOKEN)
             it.remove(KEY_REFRESH_TOKEN)
+            it.remove(KEY_ACCESS_TOKEN_MID)
         }
         _account.value = null
     }
@@ -328,8 +455,10 @@ class SessionRepository(
         val KEY_ACCOUNT = stringPreferencesKey("account")
         val KEY_ACCESS_TOKEN = stringPreferencesKey("tv_access_token")
         val KEY_REFRESH_TOKEN = stringPreferencesKey("tv_refresh_token")
+        val KEY_ACCESS_TOKEN_MID = longPreferencesKey("tv_access_token_mid")
 
         /** 名册上限：够来回切几个号就行，不做无限堆积。 */
         const val MAX_STORED_ACCOUNTS = 8
+        val AUTH_COOKIE_NAMES = setOf("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid")
     }
 }

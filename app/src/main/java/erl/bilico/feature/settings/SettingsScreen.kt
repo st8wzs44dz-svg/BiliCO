@@ -31,10 +31,12 @@ import coil3.SingletonImageLoader
 import erl.bilico.BuildConfig
 import erl.bilico.data.model.SponsorCategory
 import erl.bilico.data.repository.CdnOption
+import erl.bilico.data.settings.CoverAspect
 import erl.bilico.data.settings.DefaultQuality
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.me.AccountSwitchDialog
 import erl.bilico.feature.video.DanmakuSettingsDialog
+import erl.bilico.feature.video.PlayerTopBarSettingsDialog
 import erl.bilico.feature.video.speedLabel
 import erl.bilico.ui.NavState
 import erl.bilico.ui.components.ConfirmDialog
@@ -69,6 +71,7 @@ fun SettingsScreen(
     val returnBounce by container.settings.returnBounce.collectAsStateWithLifecycle()
     val quality by container.settings.defaultQuality.collectAsStateWithLifecycle()
     val cdnOption by container.settings.cdnOption.collectAsStateWithLifecycle()
+    val feedSource by container.settings.feedSource.collectAsStateWithLifecycle()
     val inAppBackgroundPlay by container.settings.inAppBackgroundPlay.collectAsStateWithLifecycle()
     val backgroundPlay by container.settings.backgroundPlay.collectAsStateWithLifecycle()
     val autoPip by container.settings.autoPip.collectAsStateWithLifecycle()
@@ -79,6 +82,9 @@ fun SettingsScreen(
     val autoRotateMode by container.settings.autoRotateMode.collectAsStateWithLifecycle()
     val gestureVolBright by container.settings.gestureVolumeBrightness.collectAsStateWithLifecycle()
     val fullscreenGestureHint by container.settings.fullscreenGestureHint.collectAsStateWithLifecycle()
+    val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
+    val topBarLayoutFullscreen by container.settings.playerTopBar.fullscreen.collectAsStateWithLifecycle()
+    val topBarLayoutPortrait by container.settings.playerTopBar.portrait.collectAsStateWithLifecycle()
     val danmakuEnabled by container.settings.danmakuEnabled.collectAsStateWithLifecycle()
     val danmakuSettings by container.settings.danmakuSettings.collectAsStateWithLifecycle()
     val advancedPlusOne by container.settings.advancedPlusOne.collectAsStateWithLifecycle()
@@ -93,6 +99,7 @@ fun SettingsScreen(
 
     var pickCdn by remember { mutableStateOf(false) }
     var showDanmakuSettings by remember { mutableStateOf(false) }
+    var showTopBarSettings by remember { mutableStateOf(false) }
     var showSponsorCategories by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var switchAccounts by remember { mutableStateOf(false) }
@@ -115,6 +122,17 @@ fun SettingsScreen(
                     modifier = Modifier.testTag("settings_dark"),
                     cardListPosition = CardListPosition.Head,
                     onSelectedIndexChange = container.settings::setDarkMode,
+                )
+                OverlayDropdownPreference(
+                    items = COVER_ASPECT_OPTIONS,
+                    selectedIndex = coverAspect.code.coerceIn(0, COVER_ASPECT_OPTIONS.lastIndex),
+                    title = "封面比例",
+                    summary = "推荐流卡片的封面裁切比例",
+                    modifier = Modifier.testTag("settings_cover_aspect"),
+                    cardListPosition = CardListPosition.Middle,
+                    onSelectedIndexChange = { index ->
+                        container.settings.feed.setCoverAspect(CoverAspect.fromCode(index))
+                    },
                 )
                 SwitchPreference(
                     checked = returnBounce,
@@ -211,6 +229,13 @@ fun SettingsScreen(
                     modifier = Modifier.testTag("settings_fs_hint"),
                     cardListPosition = CardListPosition.Middle,
                 )
+                ArrowPreference(
+                    title = "播放器顶栏",
+                    summary = "设置全屏与竖屏时顶栏显示哪些按钮",
+                    modifier = Modifier.testTag("settings_player_top_bar"),
+                    cardListPosition = CardListPosition.Middle,
+                    onClick = { showTopBarSettings = true },
+                )
                 SwitchPreference(
                     checked = gestureHaptic,
                     onCheckedChange = container.settings::setGestureHaptic,
@@ -288,6 +313,34 @@ fun SettingsScreen(
                     summary = "开启后，直播间点击弹幕时在 +1 右侧显示 @+1",
                     modifier = Modifier.testTag("settings_danmaku_advanced_plus_one"),
                     cardListPosition = CardListPosition.Tail,
+                )
+            }
+        }
+
+        item(key = "block-title") { SectionTitle("内容过滤与屏蔽") }
+
+        item(key = "block") {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                cornerRadius = CardDefaults.GroupCornerRadius,
+                insideMargin = PaddingValues(0.dp),
+                weight = CardDefaults.GroupWeight,
+            ) {
+                OverlayDropdownPreference(
+                    items = FEED_SOURCE_OPTIONS,
+                    selectedIndex = feedSource.coerceIn(0, FEED_SOURCE_OPTIONS.lastIndex),
+                    title = "推荐信息流来源",
+                    summary = "切换首页推荐为 App 端或网页端；云端黑名单与「我不想看」偏好按当前账号同步",
+                    modifier = Modifier.testTag("settings_feed_source"),
+                    cardListPosition = CardListPosition.Head,
+                    onSelectedIndexChange = container.settings::setFeedSource,
+                )
+                PreferenceDivider()
+                ArrowPreference(
+                    title = "屏蔽管理",
+                    summary = "关键词、UP 主、黑名单、视频与推荐过滤",
+                    cardListPosition = CardListPosition.Tail,
+                    onClick = { nav.push(Route.BlockManager) },
                 )
             }
         }
@@ -460,6 +513,16 @@ fun SettingsScreen(
         )
     }
 
+    if (showTopBarSettings) {
+        PlayerTopBarSettingsDialog(
+            fullscreen = topBarLayoutFullscreen,
+            portrait = topBarLayoutPortrait,
+            onToggle = container.settings.playerTopBar::setVisible,
+            onMove = container.settings.playerTopBar::moveItem,
+            onDismiss = { showTopBarSettings = false },
+        )
+    }
+
     if (showSponsorCategories) {
         SponsorCategoriesDialog(
             enabledIds = sponsorCategories,
@@ -503,6 +566,8 @@ fun SettingsScreen(
 
 /** 下标即存储值：0 跟随系统，1 浅色，2 深色。 */
 private val DARK_MODE_OPTIONS = listOf("跟随系统", "浅色", "深色")
+private val COVER_ASPECT_OPTIONS = CoverAspect.entries.map { it.label }
+private val FEED_SOURCE_OPTIONS = listOf("App 端推荐", "网页端推荐")
 private val AUTO_ROTATE_OPTIONS = listOf("关闭", "迟钝 (防误触, ±15°)", "标准 (±25°)", "灵敏 (±35°)")
 private val LONG_PRESS_SPEED_OPTIONS = listOf(150, 200, 250, 300, 400)
 private val SPONSOR_SKIP_MODES = listOf("自动跳过", "手动提示", "仅标记片段")

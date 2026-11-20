@@ -79,14 +79,21 @@ fun RankingSection(
 ) {
     val viewModel: RankingViewModel = viewModel { RankingViewModel(container.ranking) }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
+    val visibleItems = remember(state.items, blocks) {
+        state.items.filter { blocks.shouldShowFeedVideo(it) }
+    }
     val scope = rememberCoroutineScope()
     val pullState = rememberFullPagePullToRefreshState()
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
     val coverWidthPx = remember(screenWidthDp, density) {
-        with(density) { ((screenWidthDp.dp - 34.dp) / 2f).roundToPx() }.coerceAtMost(600)
+        with(density) { ((screenWidthDp.dp - 15.dp) / 2f).roundToPx() }.coerceAtMost(600)
     }
-    val coverHeightPx = coverWidthPx * 9 / 16
+    val coverHeightPx = remember(coverWidthPx, coverAspect) {
+        (coverWidthPx / coverAspect.ratio).toInt()
+    }
     val titleHeightPx = with(density) { TitleRowHeight.toPx() }
 
     // 只有换分区才回顶：重新进这一页时保留上次看到的位置。
@@ -147,13 +154,13 @@ fun RankingSection(
             columns = GridCells.Fixed(FeedColumns),
             modifier = Modifier.fillMaxSize().scrollEndHaptic(),
             contentPadding = PaddingValues(
-                start = 12.dp,
+                start = 5.dp,
                 top = topInset + FeedSegmentRowHeight,
-                end = 12.dp,
+                end = 5.dp,
                 bottom = 66.dp + navBottomPadding(),
             ),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             item(key = "sections", span = { GridItemSpan(maxLineSpan) }) {
                 RankingTabs(
@@ -176,7 +183,7 @@ fun RankingSection(
             }
 
             items(
-                items = state.items,
+                items = visibleItems,
                 key = { it.bvid },
                 contentType = { "rank-card" },
             ) { video ->
@@ -187,6 +194,7 @@ fun RankingSection(
                 }
                 FeedCard(
                     video = video,
+                    aspect = coverAspect,
                     coverWidthPx = coverWidthPx,
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),

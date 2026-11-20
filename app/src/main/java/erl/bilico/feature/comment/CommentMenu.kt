@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +31,8 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.theme.COUITheme
 
+internal val LocalCommentTarget = compositionLocalOf<Pair<Long, Int>?> { null }
+
 @Composable
 internal fun rememberCommentMenuItems(
     comment: Comment,
@@ -38,9 +41,42 @@ internal fun rememberCommentMenuItems(
     onRequestDelete: () -> Unit,
 ): List<CouiMenuItem> {
     val context = LocalContext.current
+    val container = erl.bilico.di.LocalAppContainer.current
+    val commentTarget = LocalCommentTarget.current
     @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
-    return remember(comment.id, comment.content, enabled, canDelete, context, clipboard) {
+    var showReport by remember(comment.id) { mutableStateOf(false) }
+    var showKeyword by remember(comment.id) { mutableStateOf(false) }
+
+    if (showReport && commentTarget != null && commentTarget.first > 0L && comment.id > 0L) {
+        erl.bilico.ui.components.ReportDialog(
+            target = erl.bilico.ui.components.ReportTarget.Comment(
+                oid = commentTarget.first,
+                rpid = comment.id,
+                mid = comment.mid,
+                userName = comment.userName,
+                avatar = comment.avatar,
+                type = commentTarget.second,
+            ),
+            onDismiss = { showReport = false },
+        )
+    }
+    if (showKeyword) {
+        erl.bilico.ui.components.KeywordBlockDialog(
+            allowedScopes = listOf(
+                erl.bilico.data.repository.BlockKeywordScope.COMMENT,
+                erl.bilico.data.repository.BlockKeywordScope.UP_NAME,
+            ),
+            initialScope = erl.bilico.data.repository.BlockKeywordScope.COMMENT,
+            scopeInitialKeywords = mapOf(
+                erl.bilico.data.repository.BlockKeywordScope.COMMENT to comment.content,
+                erl.bilico.data.repository.BlockKeywordScope.UP_NAME to comment.userName,
+            ),
+            onDismiss = { showKeyword = false },
+        )
+    }
+
+    return remember(comment, enabled, canDelete, container, commentTarget, context, clipboard) {
         if (!enabled) {
             emptyList()
         } else {
@@ -56,8 +92,30 @@ internal fun rememberCommentMenuItems(
                         ),
                     )
                 }
+                if (container != null) {
+                    if (comment.mid > 0L) {
+                        add(
+                            CouiMenuItem(
+                                label = "屏蔽该用户",
+                                group = 1,
+                                onClick = {
+                                    container.blocks.blockUserLocally(
+                                        comment.mid,
+                                        comment.userName,
+                                        comment.avatar,
+                                    )
+                                    Toast.makeText(context, "已屏蔽 ${comment.userName}", Toast.LENGTH_SHORT).show()
+                                },
+                            ),
+                        )
+                    }
+                    add(CouiMenuItem("按关键词屏蔽", onClick = { showKeyword = true }, group = 1))
+                    if (commentTarget != null && commentTarget.first > 0L && comment.id > 0L) {
+                        add(CouiMenuItem("举报评论", onClick = { showReport = true }, group = 1))
+                    }
+                }
                 if (canDelete) {
-                    add(CouiMenuItem("删除评论", onRequestDelete, group = if (isEmpty()) 0 else 1))
+                    add(CouiMenuItem("删除评论", onRequestDelete, group = if (isEmpty()) 0 else 2))
                 }
             }
         }

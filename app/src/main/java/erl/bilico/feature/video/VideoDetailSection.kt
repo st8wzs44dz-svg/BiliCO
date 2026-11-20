@@ -121,7 +121,10 @@ internal fun VideoDetailSection(
     }
     // 列表整块铺到最上面（一直到折叠态状态栏），滚动时正文从两行栏底下穿过去；
     // 静止时靠列表顶部内边距让出折叠栏 + 弹幕切换栏，第一行不会被压住。
-    val contentTop = toolbarBottom + 12.dp
+    val contentTop = firstRowHeight + DETAIL_BAR_HEIGHT + DETAIL_CONTENT_GAP
+    // 停在顶部时栏下面没有东西会滚过去，这时候开着模糊只会把第一行的上沿糊出软边；
+    // 等列表真的滚起来再启用。
+    val barBlurActive = blurActive && rememberBarScrolled(detailPager.currentPage, infoListState, commentListState)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -157,6 +160,8 @@ internal fun VideoDetailSection(
                         favorited = state.favorited,
                         following = state.following,
                         upFollowers = state.upFollowers,
+                        upOfficialType = state.upOfficialType,
+                        upOfficialDesc = state.upOfficialDesc,
                         onLike = onLike,
                         onDislike = onDislike,
                         onCoin = onOpenCoin,
@@ -240,10 +245,10 @@ internal fun VideoDetailSection(
                 .align(Alignment.TopCenter)
                 .fillMaxWidth(),
             containerColor = pageBg,
-            backdrop = if (BlurEffectsEnabled && blurActive) detailLayerBackdrop else null,
-            materialBackdrop = if (BlurEffectsEnabled && blurActive) barMaterialBackdrop else null,
+            backdrop = if (BlurEffectsEnabled && barBlurActive) detailLayerBackdrop else null,
+            materialBackdrop = if (BlurEffectsEnabled && barBlurActive) barMaterialBackdrop else null,
             topInset = firstRowHeight,
-            extraHeight = if (commentsSelected) CommentTopGap else 6.dp,
+            extraHeight = if (commentsSelected) CommentTopGap else 0.dp,
         ) {
             VideoDetailBar(
                 selected = detailPager.currentPage,
@@ -262,7 +267,7 @@ internal fun VideoDetailSection(
                 onDraftChange = onDanmakuDraftChange,
                 onComposingChange = onDanmakuComposingChange,
                 onSend = onSendDanmaku,
-                backdrop = if (BlurEffectsEnabled && blurActive) barMaterialBackdrop ?: detailLayerBackdrop else null,
+                backdrop = if (BlurEffectsEnabled && barBlurActive) barMaterialBackdrop ?: detailLayerBackdrop else null,
             )
         }
 

@@ -38,6 +38,10 @@ class SettingsRepository(
     private val _cdnOption = MutableStateFlow(CdnOption.Auto.id)
     val cdnOption: StateFlow<String> = _cdnOption.asStateFlow()
 
+    /** 首页推荐流来源：0 App 端推荐，1 网页端推荐。 */
+    private val _feedSource = MutableStateFlow(0)
+    val feedSource: StateFlow<Int> = _feedSource.asStateFlow()
+
     private val _searchHistory = MutableStateFlow<List<String>>(emptyList())
     val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
 
@@ -112,6 +116,12 @@ class SettingsRepository(
     private val _fullscreenGestureHint = MutableStateFlow(true)
     val fullscreenGestureHint: StateFlow<Boolean> = _fullscreenGestureHint.asStateFlow()
 
+    /** 播放器顶栏的显示配置，全屏与竖屏各一份。 */
+    val playerTopBar = PlayerTopBarPreferences(context, scope)
+
+    /** 信息流外观（封面比例等）。 */
+    val feed = FeedPreferences(context, scope)
+
     /** 空降助手（SponsorBlock）总开关与跳过模式：0 自动跳过，1 手动跳过，2 仅进度条标记。 */
     private val _sponsorBlockEnabled = MutableStateFlow(true)
     val sponsorBlockEnabled: StateFlow<Boolean> = _sponsorBlockEnabled.asStateFlow()
@@ -146,6 +156,7 @@ class SettingsRepository(
             _darkMode.value = prefs[KEY_DARK_MODE] ?: 0
             _defaultQuality.value = DefaultQuality.fromId(prefs[KEY_QUALITY] ?: DefaultQuality.P1080.id).id
             _cdnOption.value = CdnOption.fromId(prefs[KEY_CDN]).id
+            _feedSource.value = (prefs[KEY_FEED_SOURCE] ?: 0).coerceIn(0, 1)
             _searchHistory.value = prefs[KEY_SEARCH_HISTORY]
                 ?.split('\u0001')
                 ?.filter { it.isNotBlank() }
@@ -192,6 +203,8 @@ class SettingsRepository(
             _autoRotateMode.value = prefs[KEY_AUTO_ROTATE_MODE] ?: 1
             _gestureVolumeBrightness.value = prefs[KEY_GESTURE_VOL_BRIGHT] ?: true
             _fullscreenGestureHint.value = prefs[KEY_FS_GESTURE_HINT] ?: true
+            playerTopBar.restore()
+            feed.restore()
             _sponsorBlockEnabled.value = prefs[KEY_SPONSOR_BLOCK_ENABLED] ?: true
             _sponsorSkipMode.value = (prefs[KEY_SPONSOR_SKIP_MODE] ?: 0).coerceIn(0, 2)
             _sponsorCategories.value = prefs[KEY_SPONSOR_CATEGORIES]
@@ -505,6 +518,12 @@ class SettingsRepository(
         scope.launch { context.biliDataStore.edit { it[KEY_CDN] = value } }
     }
 
+    fun setFeedSource(mode: Int) {
+        val resolved = mode.coerceIn(0, 1)
+        _feedSource.value = resolved
+        scope.launch { context.biliDataStore.edit { it[KEY_FEED_SOURCE] = resolved } }
+    }
+
     fun addSearchHistory(keyword: String) {
         val trimmed = keyword.trim()
         if (trimmed.isEmpty()) return
@@ -533,6 +552,7 @@ class SettingsRepository(
         val KEY_DARK_MODE = intPreferencesKey("dark_mode")
         val KEY_QUALITY = intPreferencesKey("default_quality")
         val KEY_CDN = stringPreferencesKey("playback_cdn")
+        val KEY_FEED_SOURCE = intPreferencesKey("feed_source")
         val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
         val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
         val KEY_ADVANCED_PLUS_ONE = booleanPreferencesKey("danmaku_advanced_plus_one")

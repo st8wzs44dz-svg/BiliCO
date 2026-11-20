@@ -2,6 +2,7 @@ package erl.bilico.feature.feed
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,10 +23,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
@@ -42,11 +45,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import erl.bilico.data.model.FeedVideo
+import erl.bilico.data.repository.BlockKeywordScope
+import erl.bilico.data.settings.CoverAspect
 import erl.bilico.data.util.Formatters
+import erl.bilico.di.LocalAppContainer
 import erl.bilico.ui.components.Avatar
 import erl.bilico.ui.components.CouiMenuItem
 import erl.bilico.ui.components.CouiPopupMenu
-import erl.bilico.ui.components.StatLabel
+import erl.bilico.ui.components.FeedDislikeDialog
+import erl.bilico.ui.components.KeywordBlockDialog
+import erl.bilico.ui.components.ReportDialog
+import erl.bilico.ui.components.ReportTarget
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Text
@@ -56,22 +65,28 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Play
-import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val FeedAvatarSize = 18.dp
+private val FeedAvatarSize = 16.dp
 
-/** 推荐流与排行榜共用的视频卡片。 */
+private val CoverBottomScrim = Brush.verticalGradient(
+    0f to Color.Transparent,
+    0.55f to Color(0x38000000),
+    1f to Color(0x88000000),
+)
+
+/** 推荐流与排行榜共用的视频卡片：4:3 封面 + 封面底栏内嵌统计 + 下半部镜像翻转模糊盖底。 */
 @Composable
 internal fun FeedCard(
     video: FeedVideo,
+    aspect: CoverAspect = CoverAspect.CLASSIC,
     coverWidthPx: Int,
     coverHeightPx: Int,
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
     onWatchLater: () -> Unit,
-    onNotInterested: (() -> Unit)? = null,
     generateBackground: Boolean = true,
     onCoverSettled: () -> Unit = {},
 ) {
@@ -82,7 +97,6 @@ internal fun FeedCard(
     val density = LocalDensity.current
     val avatarUrl = remember(video.upFace, density) {
         val pixels = with(density) { FeedAvatarSize.roundToPx() }.coerceAtLeast(1)
-        // 向上取整到常用 CDN 尺寸，显示时仍用原来的头像大小和圆形裁剪。
         val thumbnailPx = ((pixels + 31) / 32) * 32
         Formatters.sizedImageUrl(video.upFace, thumbnailPx, thumbnailPx)
     }
@@ -99,17 +113,14 @@ internal fun FeedCard(
     val showDarkBlur = background != null
     val titleColor = if (showDarkBlur) Color.White else scheme.onSurface
     val secondaryTextColor = if (showDarkBlur) {
-        Color.White.copy(alpha = 0.7f)
+        Color.White.copy(alpha = 0.72f)
     } else {
         scheme.onSurfaceSecondary
     }
-    val menuItems = buildList {
-        add(CouiMenuItem("稍后再看", onWatchLater))
-        if (onNotInterested != null) {
-            add(CouiMenuItem("不感兴趣", onNotInterested))
-        }
-        add(CouiMenuItem("分享", { shareVideo(context, video) }))
-    }
+    val cardMenuItems = rememberVideoCardMenuItems(
+        video = video,
+        onWatchLater = onWatchLater,
+    )
 
     Box(modifier) {
         Card(
@@ -121,7 +132,7 @@ internal fun FeedCard(
             onLongPress = { menuExpanded = true },
         ) {
             Box(Modifier.fillMaxWidth().onSizeChanged { cardSize = it }) {
-                // Both halves share one image layer, so the fade starts on top of the actual cover.
+                // 封面与镜像翻转模糊共用底层图层，超出卡片圆角轮廓的部分由 Card 直接裁剪。
                 Box(Modifier.matchParentSize()) {
                     AsyncImage(
                         model = coverUrl,
@@ -135,7 +146,9 @@ internal fun FeedCard(
                             coverReady = false
                             onCoverSettled()
                         },
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(aspect.ratio),
                     )
                     if (background != null) {
                         Canvas(Modifier.matchParentSize()) {
@@ -157,68 +170,115 @@ internal fun FeedCard(
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
+                            .aspectRatio(aspect.ratio)
                             .onSizeChanged { coverHeight = it.height },
                     ) {
-                        if (video.durationText.isNotBlank()) {
-                            Text(
-                                text = video.durationText,
+                        if (video.playCountText.isNotBlank() ||
+                            video.danmakuText.isNotBlank() ||
+                            video.durationText.isNotBlank()
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(6.dp)
-                                    .clip(SquircleShape(4.dp))
-                                    .background(Color(0xB3000000))
-                                    .padding(horizontal = 5.dp, vertical = 2.dp),
-                                fontSize = 11.sp,
-                                color = Color.White,
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .height(32.dp)
+                                    .background(CoverBottomScrim),
                             )
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(end = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (video.playCountText.isNotBlank()) {
+                                        Icon(
+                                            imageVector = COUIIcons.Play,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = Color.White,
+                                        )
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(
+                                            text = video.playCountText,
+                                            fontSize = 11.sp,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    if (video.danmakuText.isNotBlank()) {
+                                        if (video.playCountText.isNotBlank()) {
+                                            Spacer(Modifier.width(10.dp))
+                                        }
+                                        Icon(
+                                            imageVector = COUIIcons.Messages,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = Color.White,
+                                        )
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(
+                                            text = video.danmakuText,
+                                            fontSize = 11.sp,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                if (video.durationText.isNotBlank()) {
+                                    Text(
+                                        text = video.durationText,
+                                        fontSize = 11.sp,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
                         }
                     }
 
                     Column(
-                        modifier = Modifier.padding(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 6.dp),
+                        modifier = Modifier.padding(start = 9.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                     ) {
                         Text(
                             text = video.title,
-                            fontSize = 14.sp,
-                            lineHeight = 21.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            fontWeight = FontWeight.Medium,
                             color = titleColor,
                             minLines = 2,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
 
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(10.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Avatar(avatarUrl, FeedAvatarSize)
-                            Spacer(Modifier.width(6.dp))
+                            if (video.upFace.isNotBlank()) {
+                                Avatar(avatarUrl, FeedAvatarSize, officialType = video.officialType)
+                                Spacer(Modifier.width(5.dp))
+                            }
                             Text(
                                 text = video.upName.ifBlank { "未知 UP" },
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = secondaryTextColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-
-                        // 三点菜单落在右下角、和播放量同一行，跟左侧头像差不多高。
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            StatLabel(COUIIcons.Play, video.playCountText, color = secondaryTextColor)
-                            if (video.danmakuText.isNotBlank()) {
-                                Spacer(Modifier.width(10.dp))
-                                StatLabel(COUIIcons.Messages, video.danmakuText, color = secondaryTextColor)
-                            }
-                            Spacer(Modifier.weight(1f))
                             MoreMenu(
-                                tint = secondaryTextColor,
                                 onWatchLater = onWatchLater,
-                                onNotInterested = onNotInterested,
                                 onShare = { shareVideo(context, video) },
+                                items = cardMenuItems,
+                                tint = secondaryTextColor,
                             )
                         }
                     }
@@ -229,18 +289,108 @@ internal fun FeedCard(
         CouiPopupMenu(
             show = menuExpanded,
             onDismiss = { menuExpanded = false },
-            items = menuItems,
+            items = cardMenuItems,
             preciseClickState = pressState,
         )
     }
 }
 
-/** 卡片右下角的三个点：COUI 的玻璃弹层菜单，稍后再看、不感兴趣与分享。与 UP 主头像同高。 */
+@Composable
+internal fun rememberVideoCardMenuItems(
+    video: FeedVideo,
+    onWatchLater: () -> Unit,
+): List<CouiMenuItem> {
+    val context = LocalContext.current
+    val container = LocalAppContainer.current
+    val scope = rememberCoroutineScope()
+    var showDislike by remember(video.bvid) { mutableStateOf(false) }
+    var showReport by remember(video.bvid) { mutableStateOf(false) }
+    var showKeyword by remember(video.bvid) { mutableStateOf(false) }
+
+    if (showDislike) {
+        FeedDislikeDialog(
+            video = video,
+            onDismiss = { showDislike = false },
+        )
+    }
+    if (showReport && video.aid > 0L) {
+        ReportDialog(
+            target = ReportTarget.Video(
+                aid = video.aid,
+                bvid = video.bvid,
+                title = video.title,
+            ),
+            onDismiss = { showReport = false },
+        )
+    }
+    if (showKeyword) {
+        KeywordBlockDialog(
+            allowedScopes = listOf(
+                BlockKeywordScope.VIDEO_TITLE,
+                BlockKeywordScope.UP_NAME,
+            ),
+            initialScope = BlockKeywordScope.VIDEO_TITLE,
+            scopeInitialKeywords = mapOf(
+                BlockKeywordScope.VIDEO_TITLE to video.title,
+                BlockKeywordScope.UP_NAME to video.upName,
+            ),
+            onDismiss = { showKeyword = false },
+        )
+    }
+
+    return remember(video, onWatchLater, container, context, scope) {
+        buildList {
+            add(CouiMenuItem("稍后再看", onWatchLater))
+            add(CouiMenuItem("分享", { shareVideo(context, video) }))
+            if (container != null) {
+                add(CouiMenuItem("我不想看", onClick = { showDislike = true }, group = 1))
+                add(CouiMenuItem("关键词屏蔽", onClick = { showKeyword = true }, group = 1))
+                if (video.upMid > 0L) {
+                    add(
+                        CouiMenuItem(
+                            label = "屏蔽该 UP 主",
+                            group = 1,
+                            onClick = {
+                                if (container.session.isLoggedIn() && container.session.csrf().isNotBlank()) {
+                                    scope.launch {
+                                        container.blocks.toggleServerBlacklist(
+                                            mid = video.upMid,
+                                            add = true,
+                                            name = video.upName,
+                                            face = video.upFace,
+                                        ).onSuccess {
+                                            Toast.makeText(context, "已屏蔽 UP 主（已同步账号黑名单）", Toast.LENGTH_SHORT).show()
+                                        }.onFailure { err ->
+                                            container.blocks.blockUserLocally(video.upMid, video.upName, video.upFace)
+                                            Toast.makeText(
+                                                context,
+                                                "已本地屏蔽 UP 主 ${video.upName}（云端同步失败：${err.message ?: "未知错误"}）",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                } else {
+                                    container.blocks.blockUserLocally(video.upMid, video.upName, video.upFace)
+                                    Toast.makeText(context, "已本地屏蔽 UP 主 ${video.upName}", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                        ),
+                    )
+                }
+                if (video.aid > 0L) {
+                    add(CouiMenuItem("举报视频", onClick = { showReport = true }, group = 2))
+                }
+            }
+        }
+    }
+}
+
+/** 卡片右下角的三个点：COUI 的玻璃弹层菜单，稍后再看、分享、屏蔽与举报。 */
 @Composable
 internal fun MoreMenu(
     onWatchLater: () -> Unit,
     onShare: () -> Unit,
-    onNotInterested: (() -> Unit)? = null,
+    items: List<CouiMenuItem>? = null,
     tint: Color = COUITheme.colorScheme.onSurfaceSecondary,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -269,13 +419,10 @@ internal fun MoreMenu(
         CouiPopupMenu(
             show = expanded,
             onDismiss = { expanded = false },
-            items = buildList {
-                add(CouiMenuItem("稍后再看", onWatchLater))
-                if (onNotInterested != null) {
-                    add(CouiMenuItem("不感兴趣", onNotInterested))
-                }
-                add(CouiMenuItem("分享", onShare))
-            },
+            items = items ?: listOf(
+                CouiMenuItem("稍后再看", onWatchLater),
+                CouiMenuItem("分享", onShare),
+            ),
         )
     }
 }

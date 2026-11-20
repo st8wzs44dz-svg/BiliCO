@@ -4,9 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.repository.FeedRepository
+import erl.bilico.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -25,6 +27,7 @@ data class FeedUiState(
 
 class FeedViewModel(
     private val repository: FeedRepository,
+    private val settings: SettingsRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FeedUiState())
@@ -32,36 +35,17 @@ class FeedViewModel(
 
     private var nextPage = 1
     private var inFlight = false
-    private val hiddenBvids = HashSet<String>()
-    private val hiddenUpMids = HashSet<Long>()
 
     init {
         refresh()
-    }
-
-    private fun List<FeedVideo>.filterHidden(): List<FeedVideo> =
-        filterNot { it.bvid in hiddenBvids || (it.upMid > 0L && it.upMid in hiddenUpMids) }
-
-    fun hideVideo(bvid: String, blockUpMid: Long? = null) {
-        hiddenBvids.add(bvid)
-        if (blockUpMid != null && blockUpMid > 0L) {
-            hiddenUpMids.add(blockUpMid)
-        }
-        _state.update { current ->
-            var removedBeforeBoundary = 0
-            val remaining = ArrayList<FeedVideo>(current.items.size)
-            current.items.forEachIndexed { index, item ->
-                val removed = item.bvid == bvid || (blockUpMid != null && blockUpMid > 0L && item.upMid == blockUpMid)
-                if (removed) {
-                    if (index < current.refreshInsertedCount) removedBeforeBoundary++
-                } else {
-                    remaining.add(item)
-                }
+        viewModelScope.launch {
+            settings.feedSource.drop(1).collect {
+                // 切换 App 端 / 网页端推荐源后重置列表并按新源加载。
+                nextPage = 1
+                inFlight = false
+                _state.value = FeedUiState(isInitialLoading = true)
+                refresh()
             }
-            current.copy(
-                items = remaining,
-                refreshInsertedCount = (current.refreshInsertedCount - removedBeforeBoundary).coerceAtLeast(0),
-            )
         }
     }
 
@@ -77,8 +61,7 @@ class FeedViewModel(
         }
         viewModelScope.launch {
             repository.recommend(1)
-                .onSuccess { rawList ->
-                    val list = rawList.filterHidden()
+                .onSuccess { list ->
                     nextPage = 2
                     _state.update { current ->
                         val oldItems = current.items
@@ -130,9 +113,8 @@ class FeedViewModel(
         viewModelScope.launch {
             val page = nextPage
             repository.recommend(page)
-                .onSuccess { rawList ->
-                    val list = rawList.filterHidden()
-                    if (rawList.isEmpty()) {
+                .onSuccess { list ->
+                    if (list.isEmpty()) {
                         _state.update { it.copy(isLoadingMore = false, isEnd = true) }
                     } else {
                         nextPage = page + 1

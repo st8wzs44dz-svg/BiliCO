@@ -32,10 +32,10 @@ fun createQrAuthorizationClient(base: OkHttpClient): OkHttpClient {
                     "/x/passport-login/web/qrcode/check",
                     "/x/passport-login/web/qrcode/scene",
                     "/x/passport-login/web/qrcode/confirm",
+                    "/x/passport-tv-login/h5/refresh",
                     "/x/passport-tv-login/qrcode/auth_code",
                     "/x/passport-tv-login/h5/qrcode/confirm",
                     "/x/passport-tv-login/qrcode/poll",
-                    "/x/passport-tv-login/h5/refresh",
                 )
                 else -> false
             }

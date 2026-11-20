@@ -43,14 +43,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import android.widget.Toast
 import coil3.SingletonImageLoader
 import coil3.annotation.ExperimentalCoilApi
 import coil3.decode.BlackholeDecoder
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import erl.bilico.data.model.FeedVideo
-import erl.bilico.data.repository.FeedDislikeAction
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
 import erl.bilico.ui.LocalTopBarBounds
@@ -121,18 +119,22 @@ internal fun RecommendFeed(
     refreshTick: Int,
     primaryTapTick: Int = 0,
 ) {
-    val viewModel: FeedViewModel = viewModel { FeedViewModel(container.feed) }
+    val viewModel: FeedViewModel = viewModel { FeedViewModel(container.feed, container.settings) }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val pullState = rememberFullPagePullToRefreshState()
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val titleHeightPx = with(density) { TitleRowHeight.toPx() }
 
+    val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
     val coverWidthPx = remember(screenWidthDp, density) {
-        with(density) { ((screenWidthDp.dp - 34.dp) / 2f).roundToPx() }.coerceAtMost(600)
+        with(density) { ((screenWidthDp.dp - 15.dp) / 2f).roundToPx() }.coerceAtMost(600)
     }
-    val coverHeightPx = coverWidthPx * 9 / 16
+    val coverHeightPx = remember(coverWidthPx, coverAspect) {
+        (coverWidthPx / coverAspect.ratio).toInt()
+    }
 
     // 刷新结果不直接换上：旧列表原地淡出，看不见时换成新批次并回到第一条，再淡入。
     // 这样不会先在顶上冒出拼接占位、再从中间闪回顶部。
@@ -250,8 +252,6 @@ internal fun RecommendFeed(
         onRefresh = { viewModel.refresh() },
     )
 
-    var dislikeTarget by remember { mutableStateOf<FeedVideo?>(null) }
-
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .distinctUntilChanged()
@@ -281,13 +281,13 @@ internal fun RecommendFeed(
                 .scrollEndHaptic()
                 .graphicsLayer { alpha = listAlpha.value },
             contentPadding = PaddingValues(
-                start = 12.dp,
+                start = 5.dp,
                 top = topInset + FeedSegmentRowHeight,
-                end = 12.dp,
+                end = 5.dp,
                 bottom = 66.dp + navBottomPadding(),
             ),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             if (shown.items.isEmpty()) {
                 item(key = "state", span = { GridItemSpan(maxLineSpan) }) {
@@ -304,8 +304,8 @@ internal fun RecommendFeed(
                 }
             }
             val inserted = shown.inserted.coerceIn(0, shown.items.size)
-            val freshItems = shown.items.take(inserted)
-            val olderItems = shown.items.drop(inserted)
+            val freshItems = shown.items.take(inserted).filter { blocks.shouldShowFeedVideo(it) }
+            val olderItems = shown.items.drop(inserted).filter { blocks.shouldShowFeedVideo(it) }
             val card: @Composable (FeedVideo) -> Unit = { video ->
                 val origin = rememberExpandOrigin()
                 val topBar = LocalTopBarBounds.current
@@ -320,12 +320,12 @@ internal fun RecommendFeed(
                 }
                 FeedCard(
                     video = video,
+                    aspect = coverAspect,
                     coverWidthPx = coverWidthPx,
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),
                     onOpen = { nav.push(Route.Video(video.bvid), origin) },
                     onWatchLater = rememberWatchLaterAction(container, video),
-                    onNotInterested = { dislikeTarget = video },
                     generateBackground = imageWorkActive && visible,
                     onCoverSettled = { settledCovers[video.bvid] = video.cover },
                 )
@@ -362,43 +362,6 @@ internal fun RecommendFeed(
                 }
             }
         }
-    }
-
-    dislikeTarget?.let { target ->
-        val loggedIn = container.session.isLoggedIn()
-        FeedDislikeDialog(
-            video = target,
-            isLoggedIn = loggedIn,
-            onDismiss = { dislikeTarget = null },
-            onSelect = { action ->
-                dislikeTarget = null
-                val blockUpMid = if (action == FeedDislikeAction.BLOCK_UP) target.upMid else null
-                viewModel.hideVideo(target.bvid, blockUpMid = blockUpMid)
-                if (!loggedIn) {
-                    Toast.makeText(context, "已隐藏，登录后可同步优化推荐", Toast.LENGTH_SHORT).show()
-                } else {
-                    scope.launch {
-                        container.feed.dislike(target, action)
-                            .onSuccess {
-                                val tip = when (action) {
-                                    FeedDislikeAction.NOT_INTERESTED -> "已减少此类推荐"
-                                    FeedDislikeAction.BLOCK_UP -> "已减少该 UP 主推荐"
-                                    FeedDislikeAction.DISLIKE_VIDEO -> "已提交点踩反馈"
-                                }
-                                Toast.makeText(context, tip, Toast.LENGTH_SHORT).show()
-                            }
-                            .onFailure { error ->
-                                val msg = error.message?.takeIf { it.isNotBlank() }
-                                Toast.makeText(
-                                    context,
-                                    if (msg != null) "已本地隐藏（$msg）" else "已本地隐藏",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                            }
-                    }
-                }
-            },
-        )
     }
 }
 

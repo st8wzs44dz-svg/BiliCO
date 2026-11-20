@@ -2,17 +2,14 @@ package erl.bilico.feature.pgc
 
 import android.util.Log
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -21,10 +18,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.PlaybackException
@@ -34,21 +29,16 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import erl.bilico.data.model.PlaybackEndMode
 import erl.bilico.data.model.isHdr
 import erl.bilico.di.AppContainer
-import erl.bilico.feature.comment.CommentTab
-import erl.bilico.feature.comment.ReplyDetailOverlay
 import erl.bilico.feature.comment.ReplyThreadController
-import erl.bilico.feature.comment.rememberCommentViewModel
-import erl.bilico.feature.video.DETAIL_BAR_HEIGHT
-import erl.bilico.feature.video.DETAIL_PAGES
+import erl.bilico.feature.video.CollapsedVideoBar
 import erl.bilico.feature.video.DanmakuController
 import erl.bilico.feature.video.DanmakuOverlay
 import erl.bilico.feature.video.DanmakuSettingsDialog
-import erl.bilico.feature.video.DetailBarGlassSurface
 import erl.bilico.feature.video.FullscreenDanmakuComposer
+import erl.bilico.feature.video.LocalPortraitSlotHeight
 import erl.bilico.feature.video.PlaybackAttempts
 import erl.bilico.feature.video.SubtitleController
 import erl.bilico.feature.video.SubtitleOverlay
-import erl.bilico.feature.video.VideoDetailBar
 import erl.bilico.feature.video.VideoFullscreenStage
 import erl.bilico.feature.video.VideoMessageToast
 import erl.bilico.feature.video.VideoPlayer
@@ -57,10 +47,9 @@ import erl.bilico.feature.video.findActivity
 import erl.bilico.feature.video.playbackMediaId
 import erl.bilico.feature.video.rememberDanmakuActions
 import erl.bilico.feature.video.rememberLongPressSpeedController
-import erl.bilico.feature.video.rememberPlayerFullscreenController
-import erl.bilico.feature.video.rememberStableNavBarBottomDp
-import erl.bilico.feature.video.rememberVideoBarBackdrops
 import erl.bilico.feature.video.resolveLongPressSpeedMode
+import erl.bilico.feature.video.rememberPlayerFullscreenController
+import erl.bilico.feature.video.rememberVideoBarBackdrops
 import erl.bilico.player.BindPlaybackSession
 import erl.bilico.player.LocalInPipMode
 import erl.bilico.player.PlaybackBridge
@@ -70,18 +59,14 @@ import erl.bilico.player.rememberPlaybackPlayer
 import erl.bilico.ui.BangumiCinemaBackground
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.LocalNavEntry
+import erl.bilico.ui.LocalRouteTransition
 import erl.bilico.ui.NavState
 import erl.bilico.ui.Route
-import erl.bilico.ui.components.LocalCommentSeek
 import erl.bilico.ui.layerBackdropIf
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-
-private val PgcCommentTopGap = 8.dp
 
 @Composable
 fun PgcScreen(
@@ -149,14 +134,23 @@ fun PgcScreen(
     val fullscreen = fsController.fullscreen
     val deviceSide = fsController.deviceSide
     val applyFullscreen = fsController.applyFullscreen
-    val detailPager = rememberPagerState(pageCount = { DETAIL_PAGES.size })
+    val routeTransition = LocalRouteTransition.current
+    val blurActive by remember(routeTransition) {
+        derivedStateOf {
+            routeTransition == null ||
+                (!routeTransition.exiting() && routeTransition.progress() >= 0.999f)
+        }
+    }
+    val detailPager = rememberPagerState(pageCount = { 2 })
     val infoListState = rememberLazyListState()
     val commentListState = rememberLazyListState()
     val replyThread = remember(seasonId) { ReplyThreadController() }
     val replyListState = rememberLazyListState()
+    val barBackdrops = rememberVideoBarBackdrops(BangumiCinemaBackground)
+    var danmakuSettingsDialogVisible by remember { mutableStateOf(false) }
+    var castDialogVisible by remember { mutableStateOf(false) }
     var danmakuComposing by rememberSaveable { mutableStateOf(false) }
     var danmakuDraft by rememberSaveable { mutableStateOf("") }
-    var danmakuSettingsDialogVisible by remember { mutableStateOf(false) }
     var speed by rememberSaveable {
         mutableFloatStateOf(if (speedLocked) lockedSpeed else 1f)
     }
@@ -300,29 +294,13 @@ fun PgcScreen(
 
     var danmakuActionMessage by remember { mutableStateOf<String?>(null) }
     val message = danmakuActionMessage ?: state.message
-    if (danmakuActionMessage != null) {
-        LaunchedEffect(danmakuActionMessage) {
-            delay(2600)
-            danmakuActionMessage = null
-        }
-    }
-    if (state.message != null) {
-        LaunchedEffect(state.message) {
-            delay(2600)
-            viewModel.consumeMessage()
-        }
-    }
-
     val sendDanmaku: () -> Unit = {
         val text = danmakuDraft.trim()
         val aid = episode?.aid ?: 0L
         val cid = episode?.cid ?: 0L
         when {
-            text.isEmpty() -> Unit
-            !container.session.isLoggedIn() -> {
-                danmakuActionMessage = "请先登录后再操作"
-            }
-            aid <= 0L || cid <= 0L -> Unit
+            text.isEmpty() || cid <= 0L -> Unit
+            !container.session.isLoggedIn() -> danmakuActionMessage = "请先登录后再操作"
             else -> scope.launch {
                 val position = player.currentPosition.coerceAtLeast(0L)
                 container.danmaku.send(aid, cid, text, position)
@@ -338,10 +316,17 @@ fun PgcScreen(
             }
         }
     }
-
-    LaunchedEffect(episode?.aid) {
-        replyThread.close()
-        commentListState.scrollToItem(0)
+    if (danmakuActionMessage != null) {
+        LaunchedEffect(danmakuActionMessage) {
+            delay(2600)
+            danmakuActionMessage = null
+        }
+    }
+    if (state.message != null) {
+        LaunchedEffect(state.message) {
+            delay(2600)
+            viewModel.consumeMessage()
+        }
     }
 
     @Composable
@@ -354,9 +339,28 @@ fun PgcScreen(
                 inlineInStage = inlineInStage,
             )
         }
+        val currentEp = viewModel.currentEpisode
+        val castEpId = currentEp?.epId ?: epId
+        val castCid = currentEp?.cid ?: 0L
+        if (castDialogVisible && (castEpId > 0L || castCid > 0L)) {
+            erl.bilico.feature.cast.CastSheet(
+                request = erl.bilico.feature.cast.CastMediaRequest(
+                    title = state.detail?.title.orEmpty(),
+                    epId = castEpId,
+                    cid = castCid,
+                    qn = state.activeQuality,
+                    initialPositionMs = player.currentPosition.coerceAtLeast(0L),
+                ),
+                inlineInStage = inlineInStage,
+                onDismiss = { castDialogVisible = false },
+            )
+        }
     }
 
-    val barBackdrops = rememberVideoBarBackdrops(BangumiCinemaBackground)
+    LaunchedEffect(episode?.aid) {
+        replyThread.close()
+        commentListState.scrollToItem(0)
+    }
 
     // HDR 档位必须走 SurfaceView：TextureView 由 GPU 合成，HDR 画面会被当成 SDR 铺到屏幕上（发暗）。
     val hdrSurface = state.source?.isHdr == true
@@ -368,11 +372,21 @@ fun PgcScreen(
         activity = activity,
         darkMode = 2,
         videoAspect = effectiveVideoAspect,
+        portraitResizable = true,
+        playing = isPlaying || isBuffering,
         surfaceViewPlayer = hdrSurface,
         detailBackground = BangumiCinemaBackground,
+        canExpand = {
+            val list = when {
+                replyThread.root != null -> replyListState
+                detailPager.currentPage == 0 -> infoListState
+                else -> commentListState
+            }
+            list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0
+        },
         playerContent = {
             val stageBackdrop = rememberLayerBackdrop()
-            val anyStageDialogOpen = fullscreen && danmakuSettingsDialogVisible
+            val anyStageDialogOpen = fullscreen && (danmakuSettingsDialogVisible || castDialogVisible)
             VideoPlayer(
                 player = player,
                 title = state.detail?.title.orEmpty(),
@@ -427,6 +441,11 @@ fun PgcScreen(
                     null
                 },
                 onHome = { nav.popToMain() },
+                onCast = if ((viewModel.currentEpisode?.epId ?: epId) > 0L || (viewModel.currentEpisode?.cid ?: 0L) > 0L) {
+                    { castDialogVisible = true }
+                } else {
+                    null
+                },
                 playbackEndMode = playbackEndMode,
                 onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
                 longPressSpeed = longPressSpeed,
@@ -483,152 +502,63 @@ fun PgcScreen(
             }
         },
         detailContent = {
-            val navBarBottom = rememberStableNavBarBottomDp()
-            val pageBg = BangumiCinemaBackground
-            val fallbackBackdrop = rememberLayerBackdrop()
-            val detailLayerBackdrop = barBackdrops.detail ?: fallbackBackdrop
-            val barMaterialBackdrop = barBackdrops.barMaterial
-            val aid = episode?.aid ?: 0L
-            val commentsSelected = detailPager.currentPage == 1
-            var commentsVisited by remember(aid) { mutableStateOf(false) }
-            LaunchedEffect(aid, commentsSelected) {
-                if (aid > 0L && commentsSelected) commentsVisited = true
-            }
-            val commentViewModel = if (aid > 0L && (commentsSelected || commentsVisited)) {
-                rememberCommentViewModel(container, aid)
-            } else {
-                null
-            }
-            val commentSort = commentViewModel?.let { model ->
-                remember(model) { model.state.map { it.sort }.distinctUntilChanged() }
-                    .collectAsStateWithLifecycle(initialValue = model.state.value.sort).value
-            }
-            val commentCount = commentViewModel?.let { model ->
-                remember(model) { model.state.map { it.total.toLong() }.distinctUntilChanged() }
-                    .collectAsStateWithLifecycle(initialValue = model.state.value.total.toLong()).value
-            } ?: 0L
-            val onSeekCommentMs: (Long) -> Unit = { ms ->
-                player.seekTo(ms)
-                if (!player.isPlaying) player.play()
-            }
-            val onOpenUser: (Long) -> Unit = { mid ->
-                if (mid > 0L) nav.push(Route.Space(mid))
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(pageBg),
-            ) {
-                HorizontalPager(
-                    state = detailPager,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .layerBackdropIf(BlurEffectsEnabled, detailLayerBackdrop)
-                        .background(pageBg),
-                    beyondViewportPageCount = 0,
-                    key = { DETAIL_PAGES[it] },
-                ) { page ->
-                    when (page) {
-                        0 -> PgcInfoTab(
-                            detail = state.detail,
-                            isLoading = state.isLoading,
-                            error = state.error,
-                            selectedEpIndex = state.selectedEpIndex,
-                            followed = state.followed,
-                            onToggleFollow = viewModel::toggleFollow,
-                            onRetry = viewModel::load,
-                            onSelectEpisode = { index ->
-                                viewModel.flushHeartbeat(player.currentPosition.coerceAtLeast(0L) / 1000, container.scope)
-                                viewModel.selectEpisode(index)
-                            },
-                            onSelectSeason = { id -> nav.push(Route.Pgc(id, 0L)) },
-                            listState = infoListState,
-                            topInset = DETAIL_BAR_HEIGHT,
-                            bottomInset = navBarBottom,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        else -> {
-                            if (aid > 0L) {
-                                CompositionLocalProvider(
-                                    LocalCommentSeek provides onSeekCommentMs,
-                                ) {
-                                    CommentTab(
-                                        container = container,
-                                        oid = aid,
-                                        onOpenUser = onOpenUser,
-                                        listState = commentListState,
-                                        topInset = DETAIL_BAR_HEIGHT + PgcCommentTopGap,
-                                        bottomInset = navBarBottom,
-                                        replyThreadController = replyThread,
-                                        toolbarViewModel = commentViewModel,
-                                        sortInToolbar = true,
-                                        panelColor = pageBg,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                DetailBarGlassSurface(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth(),
-                    containerColor = pageBg,
-                    backdrop = if (BlurEffectsEnabled) detailLayerBackdrop else null,
-                    materialBackdrop = if (BlurEffectsEnabled) barMaterialBackdrop else null,
-                    topInset = 0.dp,
-                    extraHeight = if (commentsSelected) PgcCommentTopGap else 6.dp,
-                ) {
-                    VideoDetailBar(
-                        selected = detailPager.currentPage,
-                        onSelect = { page -> scope.launch { detailPager.animateScrollToPage(page) } },
-                        commentCount = commentCount,
-                        commentSort = commentSort,
-                        onToggleCommentSort = {
-                            commentViewModel?.toggleSort()
-                            commentListState.requestScrollToItem(0)
-                        },
-                        danmakuEnabled = danmakuEnabled,
-                        onToggleDanmaku = { container.settings.setDanmakuEnabled(!danmakuEnabled) },
-                        onOpenDanmakuSettings = { danmakuSettingsDialogVisible = true },
-                        composing = danmakuComposing,
-                        draft = danmakuDraft,
-                        onDraftChange = { danmakuDraft = it },
-                        onComposingChange = {
-                            danmakuComposing = it
-                            if (!it) danmakuDraft = ""
-                        },
-                        onSend = sendDanmaku,
-                        backdrop = if (BlurEffectsEnabled) barMaterialBackdrop ?: detailLayerBackdrop else null,
-                    )
-                }
-
-                if (aid > 0L) {
-                    CompositionLocalProvider(
-                        LocalCommentSeek provides onSeekCommentMs,
-                    ) {
-                        ReplyDetailOverlay(
-                            controller = replyThread,
-                            container = container,
-                            oid = aid,
-                            listState = replyListState,
-                            topInset = 0.dp,
-                            bottomInset = navBarBottom,
-                            backEnabled = !fullscreen,
-                            threadedReplies = true,
-                            containerColor = pageBg,
-                            onOpenUser = onOpenUser,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
-            }
+            PgcDetailSection(
+                container = container,
+                nav = nav,
+                state = state,
+                aid = episode?.aid ?: 0L,
+                detailPager = detailPager,
+                infoListState = infoListState,
+                commentListState = commentListState,
+                replyThread = replyThread,
+                replyListState = replyListState,
+                danmakuEnabled = danmakuEnabled,
+                danmakuComposing = danmakuComposing,
+                danmakuDraft = danmakuDraft,
+                onOpenDanmakuSettings = { danmakuSettingsDialogVisible = true },
+                onDanmakuDraftChange = { danmakuDraft = it },
+                onDanmakuComposingChange = {
+                    danmakuComposing = it
+                    if (!it) danmakuDraft = ""
+                },
+                onSendDanmaku = sendDanmaku,
+                onSelectPage = { page -> scope.launch { detailPager.animateScrollToPage(page) } },
+                onToggleFollow = viewModel::toggleFollow,
+                onRetry = viewModel::load,
+                onSelectEpisode = { index ->
+                    viewModel.flushHeartbeat(player.currentPosition.coerceAtLeast(0L) / 1000, container.scope)
+                    viewModel.selectEpisode(index)
+                },
+                onSelectSeason = { id -> nav.push(Route.Pgc(id, 0L)) },
+                onSeekCommentMs = { ms ->
+                    player.seekTo(ms)
+                    if (!player.isPlaying) player.play()
+                },
+                barBackdrops = barBackdrops,
+                blurActive = blurActive,
+                backEnabled = !fullscreen,
+            )
         },
         portraitOverlay = {
             VideoMessageToast(message = message, inPipMode = inPipMode, inFullscreen = false)
+        },
+        portraitCollapsedBar = {
+            val slotHeight = LocalPortraitSlotHeight.current
+            CollapsedVideoBar(
+                isPlaying = isPlaying,
+                onBack = { nav.pop() },
+                onHome = { nav.popToMain() },
+                onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                onExpand = { slotHeight.floatValue = 0f },
+                playbackEndMode = playbackEndMode,
+                onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
+                onCast = if ((viewModel.currentEpisode?.epId ?: epId) > 0L || (viewModel.currentEpisode?.cid ?: 0L) > 0L) {
+                    { castDialogVisible = true }
+                } else {
+                    null
+                },
+                backdrop = barBackdrops.barMaterial,
+            )
         },
     )
 

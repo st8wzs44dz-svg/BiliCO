@@ -92,6 +92,7 @@ fun CommentTab(
     type: Int = 1,
     listState: LazyListState = rememberLazyListState(),
     topInset: Dp = 0.dp,
+    topGap: Dp = 12.dp,
     bottomInset: Dp = navBottomPadding(),
     targetRootId: Long = 0L,
     targetReplyId: Long = 0L,
@@ -104,6 +105,10 @@ fun CommentTab(
     val headerItems = if (sortInToolbar) 0 else 1
     val state by viewModel.state.collectAsStateWithLifecycle()
     val account by container.session.account.collectAsStateWithLifecycle()
+    val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
+    val visibleComments = remember(state.items, blocks) {
+        state.items.mapNotNull { blocks.filterCommentTree(it) }
+    }
     val currentMid = account?.mid ?: container.session.mid()
     val flat = type == 1 // 视频和番剧评论共用的类型。
     val localThreadController = remember { ReplyThreadController() }
@@ -149,6 +154,7 @@ fun CommentTab(
             }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalCommentTarget provides (oid to type)) {
     Box(modifier) {
     Column(Modifier.fillMaxSize()) {
         Box(
@@ -191,7 +197,7 @@ fun CommentTab(
                     modifier = Modifier.fillMaxSize().scrollEndHaptic(),
                     contentPadding = PaddingValues(
                         start = if (flat) 20.dp else 16.dp,
-                        top = topInset + if (sortInToolbar) 8.dp else 12.dp,
+                        top = topInset + if (sortInToolbar) 8.dp else topGap,
                         end = if (flat) 20.dp else 16.dp,
                         bottom = 88.dp + bottomInset,
                     ),
@@ -217,7 +223,7 @@ fun CommentTab(
                             )
                         }
                     }
-                    itemsIndexed(state.items, key = { _, comment -> comment.id }, contentType = { _, _ -> "comment" }) { index, comment ->
+                    itemsIndexed(visibleComments, key = { _, comment -> comment.id }, contentType = { _, _ -> "comment" }) { index, comment ->
                         val commentRow: @Composable () -> Unit = {
                             BiliCommentItem(
                                 comment = comment,
@@ -250,7 +256,7 @@ fun CommentTab(
                                 currentMid = currentMid,
                                 onDelete = { viewModel.deleteComment(comment) },
                                 flat = flat,
-                                showDivider = flat && index < state.items.lastIndex,
+                                showDivider = flat && index < visibleComments.lastIndex,
                             )
                         }
                         if (flat) {
@@ -409,6 +415,7 @@ fun CommentTab(
             initialIndex = index,
             onDismiss = { imageViewer = null },
         )
+    }
     }
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.exoplayer.ExoPlayer
+import erl.bilico.data.model.VideoEpisode
 import erl.bilico.di.AppContainer
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.NavState
@@ -57,13 +58,16 @@ internal fun BoxScope.VideoPlayerSlot(
     danmakuDraft: String,
     onDanmakuDraftChange: (String) -> Unit,
     onSendDanmaku: () -> Unit,
-    chapterDialogVisible: Boolean,
-    onOpenChapterDialog: () -> Unit,
-    onDismissChapterDialog: () -> Unit,
+    onSelectPart: (Int) -> Unit,
+    onSelectEpisode: (VideoEpisode) -> Unit,
     danmakuSettingsDialogVisible: Boolean,
     onDismissDanmakuSettings: () -> Unit,
     sponsorSubmitDialog: (@Composable (Boolean) -> Unit)?,
     onSubmitSponsor: (() -> Unit)?,
+    castDialog: (@Composable (Boolean) -> Unit)? = null,
+    onCast: (() -> Unit)? = null,
+    reportVideoDialog: (@Composable (Boolean) -> Unit)? = null,
+    onReportVideo: (() -> Unit)? = null,
     onFullscreenChange: (Boolean) -> Unit,
     onEnterPip: (() -> Unit)?,
 ) {
@@ -81,9 +85,18 @@ internal fun BoxScope.VideoPlayerSlot(
     val sponsorSkipMode by container.settings.sponsorSkipMode.collectAsStateWithLifecycle()
     val sponsorCategories by container.settings.sponsorCategories.collectAsStateWithLifecycle()
     val playbackEndMode by container.settings.playbackEndMode.collectAsStateWithLifecycle()
+    val topBarLayoutFullscreen by container.settings.playerTopBar.fullscreen.collectAsStateWithLifecycle()
+    val topBarLayoutPortrait by container.settings.playerTopBar.portrait.collectAsStateWithLifecycle()
 
     val anyStageDialogOpen = fullscreen &&
-        (danmakuSettingsDialogVisible || chapterDialogVisible || sponsorSubmitDialog != null)
+        (danmakuSettingsDialogVisible || sponsorSubmitDialog != null ||
+            castDialog != null || reportVideoDialog != null)
+    val episodesMenuItems = rememberEpisodesMenuItems(
+        detail = state.detail,
+        selectedCid = state.selectedCid,
+        onSelectPart = onSelectPart,
+        onSelectEpisode = onSelectEpisode,
+    )
 
     VideoPlayer(
         player = player,
@@ -112,6 +125,10 @@ internal fun BoxScope.VideoPlayerSlot(
         speedLocked = speedLocked,
         onToggleSpeedLock = onToggleSpeedLock,
         onSelectSpeed = onSelectSpeed,
+        topBarLayoutFullscreen = topBarLayoutFullscreen,
+        topBarLayoutPortrait = topBarLayoutPortrait,
+        onToggleTopBarItem = container.settings.playerTopBar::setVisible,
+        onMoveTopBarItem = container.settings.playerTopBar::moveItem,
         onBack = { if (fullscreen) onFullscreenChange(false) else nav.pop() },
         onRetry = viewModel::load,
         modifier = Modifier
@@ -131,19 +148,22 @@ internal fun BoxScope.VideoPlayerSlot(
         playbackEndMode = playbackEndMode,
         onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
         onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
+        onCast = onCast,
+        onReportVideo = onReportVideo,
         longPressSpeed = longPressSpeed,
         longPressSpeedMode = resolveLongPressSpeedMode(
             adjustableLongPressSpeed,
             swipeDownLockLongPressSpeed,
         ),
         chapters = subtitleController.chapters,
-        onChapterClick = onOpenChapterDialog,
+        episodesMenuItems = episodesMenuItems,
         sponsorSegments = if (sponsorBlockEnabled) {
             sponsorController.segments.filter { it.category.id in sponsorCategories }
         } else {
             emptyList()
         },
         onSubmitSponsor = onSubmitSponsor,
+        onJumpSponsorSegment = { segment -> sponsorController.jumpToSegment(player, segment) },
         sponsorOverlay = { bottomPad, startPad ->
             if (sponsorBlockEnabled && sponsorSkipMode >= 0) {
                 SponsorBlockPromptOverlay(
@@ -217,16 +237,9 @@ internal fun BoxScope.VideoPlayerSlot(
                 danmakuSettings = danmakuSettings,
                 settingsRepository = container.settings,
                 onDismissDanmakuSettings = onDismissDanmakuSettings,
-                chapterDialogVisible = chapterDialogVisible,
-                chapters = subtitleController.chapters,
-                positionMs = clock.positionMs,
-                onSelectChapter = { chapter ->
-                    onDismissChapterDialog()
-                    player.seekTo(chapter.fromMs)
-                    if (!player.isPlaying) player.play()
-                },
-                onDismissChapter = onDismissChapterDialog,
                 sponsorSubmitDialog = sponsorSubmitDialog,
+                castDialog = castDialog,
+                reportVideoDialog = reportVideoDialog,
                 inlineInStage = true,
             )
         }
@@ -249,6 +262,8 @@ internal fun VideoCollapsedBarSlot(
     bvid: String,
     state: VideoUiState,
     backdrop: LayerBackdrop?,
+    onCast: (() -> Unit)? = null,
+    onReportVideo: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val slotHeight = LocalPortraitSlotHeight.current
@@ -265,6 +280,8 @@ internal fun VideoCollapsedBarSlot(
         playbackEndMode = playbackEndMode,
         onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
         onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
+        onCast = onCast,
+        onReportVideo = onReportVideo,
         backdrop = backdrop,
     )
 }

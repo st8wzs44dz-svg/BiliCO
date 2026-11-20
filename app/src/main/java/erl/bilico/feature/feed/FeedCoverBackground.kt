@@ -88,7 +88,10 @@ internal fun rememberFeedCoverBackground(
     LaunchedEffect(key, coverReady, generateBackground) {
         if (key == null || !coverReady || !generateBackground || background != null) return@LaunchedEffect
         val thumbnailWidth = with(density) { 48.dp.roundToPx() }.coerceAtLeast(1)
-        val thumbnailUrl = Formatters.sizedImageUrl(originalUrl, thumbnailWidth, (thumbnailWidth * 9 / 16).coerceAtLeast(1))
+        val thumbnailHeight = (thumbnailWidth.toFloat() * key.coverHeight / key.width.coerceAtLeast(1))
+            .roundToInt()
+            .coerceAtLeast(1)
+        val thumbnailUrl = Formatters.sizedImageUrl(originalUrl, thumbnailWidth, thumbnailHeight)
         background = backgroundWorker.withPermit {
             backgroundCache.get(key) ?: loadBackground(context, key, thumbnailUrl)?.also {
                 backgroundCache.put(key, it)

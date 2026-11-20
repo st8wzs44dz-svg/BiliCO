@@ -52,6 +52,7 @@ import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import erl.bilico.ExternalVideoLink
 import erl.bilico.di.AppContainer
+import erl.bilico.di.LocalAppContainer
 import erl.bilico.feature.article.ArticleScreen
 import erl.bilico.feature.chat.ChatScreen
 import erl.bilico.feature.comment.EmoteManagerScreen
@@ -74,10 +75,12 @@ import erl.bilico.feature.pgc.BangumiFollowScreen
 import erl.bilico.feature.pgc.PgcScreen
 import erl.bilico.feature.search.SearchScreen
 import erl.bilico.feature.settings.AboutScreen
+import erl.bilico.feature.settings.BlockManagerScreen
 import erl.bilico.feature.settings.SettingsScreen
 import erl.bilico.feature.space.SpaceScreen
 import erl.bilico.feature.update.UpdateDialog
 import erl.bilico.feature.update.UpdateScreen
+import erl.bilico.feature.video.PlayerWindowBrightnessEffect
 import erl.bilico.feature.video.VideoScreen
 import erl.bilico.feature.watchlater.WatchLaterScreen
 import erl.bilico.player.LocalInPipMode
@@ -211,6 +214,7 @@ internal fun BiliCoRoot(
         LocalImageViewerHost provides viewerHost,
         LocalOpenBvid provides { target -> openVideoTarget(target, nav, container, context, scope) },
         LocalLiveRepository provides container.live,
+        LocalAppContainer provides container,
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
         val widthPx = constraints.maxWidth.toFloat()
@@ -310,6 +314,9 @@ internal fun BiliCoRoot(
         val topEntry = nav.stack.lastOrNull { !it.exiting }
         val topRoute = topEntry?.route
         val inPipMode = LocalInPipMode.current
+        // 播放页的亮度手势借的是宿主窗口，离开播放页必须还给系统，
+        // 否则回到首页还停在调过的那一档，整个界面一直刺眼。
+        PlayerWindowBrightnessEffect(active = topRoute?.isPlayback() == true && !inPipMode)
         RootStatusBarSync(
             nav = nav,
             dark = dark,
@@ -565,6 +572,7 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         Route.WatchLater -> WatchLaterScreen(container, nav)
         Route.Following -> FollowingScreen(container, nav)
         Route.Settings -> SettingsScreen(container, nav)
+        Route.BlockManager -> BlockManagerScreen(container, nav)
         Route.About -> AboutScreen(container, nav)
         is Route.Pgc -> BiliCoTheme(darkMode = 2) {
             PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000)

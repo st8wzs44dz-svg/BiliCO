@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -240,6 +241,12 @@ internal fun FloatingBottomBar(
     }
 
     var orbMenuExpanded by remember { mutableStateOf(false) }
+
+    if (barBounds != null) {
+        DisposableEffect(barBounds) {
+            onDispose { barBounds.reportBottomBar(0f) }
+        }
+    }
 
     Box(
         modifier

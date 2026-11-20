@@ -171,6 +171,7 @@ internal fun ReplyDetailPage(
     modifier: Modifier = Modifier,
 ) {
     val account by container.session.account.collectAsStateWithLifecycle()
+    val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
     val currentMid = account?.mid ?: container.session.mid()
     val detailState = rememberReplyDetailState(
         container = container,
@@ -181,6 +182,9 @@ internal fun ReplyDetailPage(
         onSubReplyDeleted = onSubReplyDeleted,
         onRootDeleted = onRootDeleted,
     )
+    val visibleReplies = remember(detailState.items, blocks) {
+        detailState.items.mapNotNull { blocks.filterCommentTree(it) }
+    }
     LaunchedEffect(comment) {
         if (comment.id == detailState.rootComment.id) {
             detailState.rootComment = comment
@@ -211,9 +215,9 @@ internal fun ReplyDetailPage(
     var alignRequest by remember(comment.id) { mutableStateOf<Long?>(null) }
     var targetReplyHandled by remember(comment.id, initialTargetReplyId) { mutableStateOf(false) }
     var bottomStackPx by remember { mutableIntStateOf(0) }
-    val replyRows = remember(comment.id, threadedReplies, detailState.items) {
-        if (threadedReplies) buildReplyRows(comment.id, detailState.items)
-        else detailState.items.map { ReplyRow(it) }
+    val replyRows = remember(comment.id, threadedReplies, visibleReplies) {
+        if (threadedReplies) buildReplyRows(comment.id, visibleReplies)
+        else visibleReplies.map { ReplyRow(it) }
     }
     val replyIndices = remember(replyRows) {
         replyRows.mapIndexed { index, row -> row.comment.id to (SUB_REPLY_ITEM_OFFSET + index) }.toMap()
@@ -369,6 +373,7 @@ internal fun ReplyDetailPage(
     CompositionLocalProvider(
         LocalOpenBvid provides parentOpenBvid,
         LocalCommentSeek provides parentSeek,
+        LocalCommentTarget provides (oid to type),
         LocalEdgeToEdge provides true,
     ) {
         Box(
@@ -442,7 +447,7 @@ internal fun ReplyDetailPage(
                     }
                 }
 
-                if (detailState.items.isEmpty()) {
+                if (visibleReplies.isEmpty()) {
                     item(key = "sub_placeholder") {
                         SubReplyPlaceholderBox(
                             isLoading = detailState.isLoading,

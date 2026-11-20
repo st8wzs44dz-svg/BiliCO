@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -389,7 +390,7 @@ private val MIN_DANMAKU_CAPSULE_WIDTH = 124.dp
  * 那是给旧的纯文字「取消」算的。把胶囊「发送」塞进去，整行右端就比左端多空一截；
  * 多量这 16dp 让搜索栏自己把这截吃回去，行尾重新对齐。
  */
-private fun Modifier.actionEndSlack(slack: Dp): Modifier =
+internal fun Modifier.actionEndSlack(slack: Dp): Modifier =
     layout { measurable, constraints ->
         val extra = slack.roundToPx()
         val placeable = if (extra == 0) {
@@ -408,7 +409,7 @@ private fun Modifier.actionEndSlack(slack: Dp): Modifier =
 
 
 /** 弹幕输入框与发送按钮共用的紧凑高度；与 COUI-Kit ChipTab 32dp 一致 */
-private val DETAIL_CAPSULE_HEIGHT = 32.dp
+internal val DETAIL_CAPSULE_HEIGHT = 32.dp
 
 /**
  * 「简介 / 评论」标签栏的高度。
@@ -416,10 +417,38 @@ private val DETAIL_CAPSULE_HEIGHT = 32.dp
  * 详情页把列表顶到整块区域的最上面，由这条栏浮在上面盖住滚过去的正文；
  * 列表的顶部内边距要按这个高度留，静止时第一行才不会被栏压住。
  */
-internal val DETAIL_BAR_HEIGHT = 48.dp
+internal val DETAIL_BAR_HEIGHT = 44.dp
+
+/** 切换栏下沿到正文第一行之间的间距；栏本身是浮层，正文从这里开始就不会被压住。 */
+internal val DETAIL_CONTENT_GAP = 4.dp
+
+/** 列表滚过这段距离才算离开顶部，顶栏到这时才开始启用毛玻璃。 */
+private val DETAIL_BLUR_THRESHOLD = 8.dp
+
+/**
+ * 顶栏是否已经离开列表顶部。
+ *
+ * 停在顶部时栏下面没有内容会滚过去，这时候开着模糊只会把正文第一行的上沿糊出软边；
+ * 滚动起来再启用。只订阅一个布尔量，滑动过程中不会让整页重组。
+ */
+@Composable
+internal fun rememberBarScrolled(
+    page: Int,
+    infoList: LazyListState,
+    commentList: LazyListState,
+): Boolean {
+    val thresholdPx = with(LocalDensity.current) { DETAIL_BLUR_THRESHOLD.roundToPx() }
+    val scrolled = remember(page, infoList, commentList, thresholdPx) {
+        derivedStateOf {
+            val list = if (page == 0) infoList else commentList
+            list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > thresholdPx
+        }
+    }
+    return scrolled.value
+}
 
 /** COUI `SearchBar` 在 `outsideEndAction` 后面固定垫的 16dp，展开时补回来。 */
-private val ACTION_END_SLACK = 16.dp
+internal val ACTION_END_SLACK = 16.dp
 
 /** COUI 搜索栏背景变形的时长，让标签收起与胶囊铺开同一条节奏。 */
 private const val DETAIL_RESIZE_MILLIS = 450
