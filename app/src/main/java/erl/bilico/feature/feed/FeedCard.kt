@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -28,7 +27,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
@@ -39,6 +37,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -71,13 +70,7 @@ import kotlin.math.roundToInt
 
 private val FeedAvatarSize = 16.dp
 
-private val CoverBottomScrim = Brush.verticalGradient(
-    0f to Color.Transparent,
-    0.55f to Color(0x38000000),
-    1f to Color(0x88000000),
-)
-
-/** 推荐流与排行榜共用的视频卡片：4:3 封面 + 封面底栏内嵌统计 + 下半部镜像翻转模糊盖底。 */
+/** 推荐流与排行榜共用的视频卡片：4:3 封面 + 镜像翻转模糊一体衬底（覆盖底边统计与紧凑信息区）。 */
 @Composable
 internal fun FeedCard(
     video: FeedVideo,
@@ -177,18 +170,11 @@ internal fun FeedCard(
                             video.danmakuText.isNotBlank() ||
                             video.durationText.isNotBlank()
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .fillMaxWidth()
-                                    .height(32.dp)
-                                    .background(CoverBottomScrim),
-                            )
                             Row(
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
                                     .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(start = 9.dp, end = 9.dp, bottom = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Row(
@@ -208,6 +194,7 @@ internal fun FeedCard(
                                         Text(
                                             text = video.playCountText,
                                             fontSize = 11.sp,
+                                            lineHeight = 14.sp,
                                             color = Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -227,6 +214,7 @@ internal fun FeedCard(
                                         Text(
                                             text = video.danmakuText,
                                             fontSize = 11.sp,
+                                            lineHeight = 14.sp,
                                             color = Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -237,6 +225,7 @@ internal fun FeedCard(
                                     Text(
                                         text = video.durationText,
                                         fontSize = 11.sp,
+                                        lineHeight = 14.sp,
                                         color = Color.White,
                                         maxLines = 1,
                                     )
@@ -246,12 +235,12 @@ internal fun FeedCard(
                     }
 
                     Column(
-                        modifier = Modifier.padding(start = 9.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                        modifier = Modifier.padding(start = 9.dp, end = 6.dp, top = 5.dp, bottom = 7.dp),
                     ) {
                         Text(
                             text = video.title,
                             fontSize = 13.sp,
-                            lineHeight = 18.sp,
+                            lineHeight = 17.sp,
                             fontWeight = FontWeight.Medium,
                             color = titleColor,
                             minLines = 2,
@@ -259,7 +248,7 @@ internal fun FeedCard(
                             overflow = TextOverflow.Ellipsis,
                         )
 
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(5.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (video.upFace.isNotBlank()) {
@@ -269,6 +258,7 @@ internal fun FeedCard(
                             Text(
                                 text = video.upName.ifBlank { "未知 UP" },
                                 fontSize = 11.sp,
+                                lineHeight = 14.sp,
                                 color = secondaryTextColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -279,6 +269,8 @@ internal fun FeedCard(
                                 onShare = { shareVideo(context, video) },
                                 items = cardMenuItems,
                                 tint = secondaryTextColor,
+                                buttonSize = 18.dp,
+                                iconSize = 16.dp,
                             )
                         }
                     }
@@ -392,13 +384,15 @@ internal fun MoreMenu(
     onShare: () -> Unit,
     items: List<CouiMenuItem>? = null,
     tint: Color = COUITheme.colorScheme.onSurfaceSecondary,
+    buttonSize: Dp = 20.dp,
+    iconSize: Dp = 18.dp,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     Box {
         Box(
             modifier = Modifier
-                .size(20.dp)
+                .size(buttonSize)
                 .clip(CircleShape)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -411,7 +405,7 @@ internal fun MoreMenu(
             Icon(
                 imageVector = COUIIcons.More,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(iconSize),
                 tint = tint,
             )
         }

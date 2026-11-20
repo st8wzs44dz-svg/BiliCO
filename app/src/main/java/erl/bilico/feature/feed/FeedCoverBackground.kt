@@ -53,7 +53,7 @@ private val backgroundCache = object : LruCache<BackgroundKey, ImageBitmap>(Back
 // A lazy grid can compose several cards in one frame. Keep thumbnail decoding and blur work bounded.
 private val backgroundWorker = Semaphore(1)
 
-internal val FeedCoverOverlap = 40.dp
+internal val FeedCoverOverlap = 44.dp
 
 @Composable
 internal fun rememberFeedCoverBackground(
@@ -157,18 +157,19 @@ private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
     }
     val pixels = if (padTop == 0) blurred else blurred.copyOfRange(padTop * width, paddedHeight * width)
 
-    val fadeHeight = (overlap - 2).coerceAtLeast(1)
+    // Smoothly feather the upper ~28dp of the overlap so the lower ~16dp (behind cover-bottom stats)
+    // already sits on the unified blurred & luminance-compressed backdrop without any separate dark scrim.
+    val fadeHeight = (overlap * 0.64f).roundToInt().coerceIn(1, (overlap - 2).coerceAtLeast(1))
     val maxRow = (height - 1).coerceAtLeast(1)
     for (y in 0 until height) {
         val progress = y.toFloat() / maxRow
-        // Keep the last two samples above the join opaque, including after bilinear upscaling.
         val blend = smootherStep(y.toFloat() / fadeHeight)
         val alpha = (255f * blend).roundToInt()
         val smoothProgress = smootherStep(progress)
         val scrim = 1f - 0.22f * smoothProgress
-        // White title text and 70%-white metadata need smooth contrast compression on bright covers.
-        val softCap = 118f - 30f * smoothProgress
-        val compressWeight = 0.25f + 0.75f * smootherStep(progress / 0.45f)
+        // White stats/title text and 70%-white metadata need smooth contrast compression on bright covers.
+        val softCap = 114f - 26f * smoothProgress
+        val compressWeight = 0.40f + 0.60f * smootherStep(progress / 0.35f)
         for (x in 0 until width) {
             val index = y * width + x
             val color = pixels[index]
