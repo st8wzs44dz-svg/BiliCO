@@ -50,8 +50,8 @@ private val backgroundCache = object : LruCache<BackgroundKey, ImageBitmap>(Back
     override fun sizeOf(key: BackgroundKey, value: ImageBitmap): Int = value.width * value.height * 4
 }
 
-// A lazy grid can compose several cards in one frame. Keep thumbnail decoding and blur work bounded.
-private val backgroundWorker = Semaphore(1)
+// Allow bounded parallel blur work across visible cards without stalling on a single slot.
+private val backgroundWorker = Semaphore(3)
 
 internal val FeedCoverOverlap = 44.dp
 
@@ -60,6 +60,7 @@ internal fun rememberFeedCoverBackground(
     originalUrl: String,
     coverUrl: String,
     coverReady: Boolean,
+    coverBitmap: Bitmap?,
     cardSize: IntSize,
     coverHeight: Int,
     generateBackground: Boolean,
@@ -85,17 +86,15 @@ internal fun rememberFeedCoverBackground(
         }
     }
     var background by remember(key) { mutableStateOf(key?.let { backgroundCache.get(it) }) }
-    LaunchedEffect(key, coverReady, generateBackground) {
+    LaunchedEffect(key, coverReady, coverBitmap, generateBackground) {
         if (key == null || !coverReady || !generateBackground || background != null) return@LaunchedEffect
         val thumbnailWidth = with(density) { 48.dp.roundToPx() }.coerceAtLeast(1)
         val thumbnailHeight = (thumbnailWidth.toFloat() * key.coverHeight / key.width.coerceAtLeast(1))
             .roundToInt()
             .coerceAtLeast(1)
         val thumbnailUrl = Formatters.sizedImageUrl(originalUrl, thumbnailWidth, thumbnailHeight)
-        background = backgroundWorker.withPermit {
-            backgroundCache.get(key) ?: loadBackground(context, key, thumbnailUrl)?.also {
-                backgroundCache.put(key, it)
-            }
+        background = backgroundCache.get(key) ?: loadBackground(context, key, coverBitmap, thumbnailUrl)?.also {
+            backgroundCache.put(key, it)
         }
     }
     return background.takeIf { coverReady }
@@ -103,7 +102,34 @@ internal fun rememberFeedCoverBackground(
 
 private fun scaledPixels(pixels: Int): Int = (pixels * BackgroundScale).roundToInt().coerceAtLeast(1)
 
-private suspend fun loadBackground(context: Context, key: BackgroundKey, thumbnailUrl: String): ImageBitmap? {
+private suspend fun loadBackground(
+    context: Context,
+    key: BackgroundKey,
+    coverBitmap: Bitmap?,
+    thumbnailUrl: String,
+): ImageBitmap? {
+    // 优先直接复用 AsyncImage 已解码好的内存位图，避免二次读盘或走网络拖慢整屏卡片。
+    if (coverBitmap != null && !coverBitmap.isRecycled) {
+        val rendered = backgroundWorker.withPermit {
+            withContext(Dispatchers.Default) {
+                runCatching {
+                    val isHardware = coverBitmap.config == Bitmap.Config.HARDWARE
+                    val source = if (isHardware) {
+                        coverBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                    } else {
+                        coverBitmap
+                    } ?: return@runCatching null
+                    try {
+                        renderBackground(source, key)
+                    } finally {
+                        if (isHardware) source.recycle()
+                    }
+                }.getOrNull()
+            }
+        }
+        if (rendered != null) return rendered
+    }
+
     val loader = SingletonImageLoader.get(context)
     val request = ImageRequest.Builder(context)
         .size(key.width, key.coverHeight)
@@ -111,7 +137,7 @@ private suspend fun loadBackground(context: Context, key: BackgroundKey, thumbna
         .allowHardware(false)
         .memoryCachePolicy(CachePolicy.DISABLED)
 
-    // Decode a small software sample from the displayed cover's disk cache entry first.
+    // 兜底：先读已展示封面的磁盘缓存，再回退到小缩略图（网络请求不占 CPU 模糊信号量）。
     val cachedCover = loader.execute(
         request.data(key.coverUrl).networkCachePolicy(CachePolicy.DISABLED).build(),
     ) as? SuccessResult
@@ -119,8 +145,10 @@ private suspend fun loadBackground(context: Context, key: BackgroundKey, thumbna
         request.data(thumbnailUrl).networkCachePolicy(CachePolicy.ENABLED).build(),
     ) as? SuccessResult) ?: return null
 
-    return withContext(Dispatchers.Default) {
-        renderBackground(cover.image.toBitmap(), key)
+    return backgroundWorker.withPermit {
+        withContext(Dispatchers.Default) {
+            renderBackground(cover.image.toBitmap(), key)
+        }
     }
 }
 

@@ -27,12 +27,12 @@ class FeedRepository(
     private val tokenRefresh: TokenRefreshHelper,
     private val settings: SettingsRepository,
 ) {
-    private data class UpProfile(
+    data class FeedUpProfile(
         val face: String,
         val officialType: Int,
     )
 
-    private val upProfileCache = ConcurrentHashMap<Long, UpProfile>()
+    private val upProfileCache = ConcurrentHashMap<Long, FeedUpProfile>()
 
     /**
      * 首页推荐：根据设置选择「App 端推荐」或「网页端推荐」。
@@ -93,43 +93,12 @@ class FeedRepository(
         val videos = response.data?.items.orEmpty()
             .filter { it.adInfo == null && (it.cardGoto == "av" || it.goto == "av") }
             .mapNotNull { it.toFeedVideo() }
-        return enrichUpProfiles(videos)
+        // 仅同步套用已命中的内存缓存，未命中的头像交由调用方后台异步回填，避免阻塞推荐流首屏渲染。
+        return applyCachedUpProfiles(videos)
     }
 
-    /**
-     * App 端双列卡片（small_cover_v2）不下发 UP 主头像。
-     * 用批量用户信息接口一次补全整页缺失的头像与认证角标，失败时静默兜底不影响推荐流展示。
-     */
-    private suspend fun enrichUpProfiles(videos: List<FeedVideo>): List<FeedVideo> {
-        val missingMids = videos.asSequence()
-            .filter { it.upFace.isBlank() && it.upMid > 0L }
-            .map { it.upMid }
-            .distinct()
-            .filter { !upProfileCache.containsKey(it) }
-            .toList()
-        if (missingMids.isNotEmpty()) {
-            if (upProfileCache.size > MAX_PROFILE_CACHE_SIZE) {
-                upProfileCache.clear()
-            }
-            missingMids.chunked(50).forEach { chunk ->
-                val data = runCatching {
-                    val response = api.liveMultipleUsers(uids = chunk)
-                    if (response.code == 0) response.data.orEmpty() else emptyMap()
-                }.getOrNull().orEmpty()
-                data.forEach { (midKey, entry) ->
-                    val info = entry.info ?: return@forEach
-                    val mid = info.uid.takeIf { it > 0L } ?: midKey.toLongOrNull() ?: return@forEach
-                    val face = Formatters.normalizeImageUrl(info.face)
-                    if (face.isNotBlank()) {
-                        upProfileCache[mid] = UpProfile(
-                            face = face,
-                            officialType = info.officialVerify?.resolvedType() ?: -1,
-                        )
-                    }
-                }
-            }
-        }
-        return videos.map { video ->
+    private fun applyCachedUpProfiles(videos: List<FeedVideo>): List<FeedVideo> =
+        videos.map { video ->
             if (video.upFace.isNotBlank() || video.upMid <= 0L) return@map video
             val profile = upProfileCache[video.upMid] ?: return@map video
             video.copy(
@@ -137,7 +106,44 @@ class FeedRepository(
                 officialType = if (video.officialType == -1) profile.officialType else video.officialType,
             )
         }
-    }
+
+    /**
+     * App 端双列卡片（small_cover_v2）不下发 UP 主头像。
+     * 供 ViewModel 在卡片展示后异步批量拉取缺失的头像与认证角标，失败时静默兜底不影响推荐流。
+     */
+    suspend fun fetchMissingUpProfiles(mids: Collection<Long>): Map<Long, FeedUpProfile> =
+        withContext(Dispatchers.IO) {
+            val distinctMids = mids.asSequence().filter { it > 0L }.distinct().toList()
+            if (distinctMids.isEmpty()) return@withContext emptyMap()
+            val missing = distinctMids.filter { !upProfileCache.containsKey(it) }
+            if (missing.isNotEmpty()) {
+                if (upProfileCache.size > MAX_PROFILE_CACHE_SIZE) {
+                    upProfileCache.clear()
+                }
+                missing.chunked(50).forEach { chunk ->
+                    val data = runCatching {
+                        val response = api.liveMultipleUsers(uids = chunk)
+                        if (response.code == 0) response.data.orEmpty() else emptyMap()
+                    }.getOrNull().orEmpty()
+                    data.forEach { (midKey, entry) ->
+                        val info = entry.info ?: return@forEach
+                        val mid = info.uid.takeIf { it > 0L } ?: midKey.toLongOrNull() ?: return@forEach
+                        val face = Formatters.normalizeImageUrl(info.face)
+                        if (face.isNotBlank()) {
+                            upProfileCache[mid] = FeedUpProfile(
+                                face = face,
+                                officialType = info.officialVerify?.resolvedType() ?: -1,
+                            )
+                        }
+                    }
+                }
+            }
+            buildMap {
+                distinctMids.forEach { mid ->
+                    upProfileCache[mid]?.let { put(mid, it) }
+                }
+            }
+        }
 
     private suspend fun fetchWebRecommend(page: Int): List<FeedVideo> {
         val keys = wbi.getKeys()

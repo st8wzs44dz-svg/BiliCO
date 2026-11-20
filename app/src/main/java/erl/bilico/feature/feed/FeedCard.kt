@@ -2,8 +2,10 @@ package erl.bilico.feature.feed
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -42,6 +44,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.BitmapImage
 import coil3.compose.AsyncImage
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.repository.BlockKeywordScope
@@ -98,10 +101,11 @@ internal fun FeedCard(
     val pressState = rememberPreciseClickState()
     var menuExpanded by remember { mutableStateOf(false) }
     var coverReady by remember(coverUrl) { mutableStateOf(false) }
+    var coverBitmap by remember(coverUrl) { mutableStateOf<Bitmap?>(null) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
     var coverHeight by remember { mutableStateOf(0) }
     val background = rememberFeedCoverBackground(
-        video.cover, coverUrl, coverReady, cardSize, coverHeight, generateBackground,
+        video.cover, coverUrl, coverReady, coverBitmap, cardSize, coverHeight, generateBackground,
     )
     val showDarkBlur = background != null
     val titleColor = if (showDarkBlur) Color.White else scheme.onSurface
@@ -131,17 +135,20 @@ internal fun FeedCard(
                         model = coverUrl,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        onSuccess = {
+                        onSuccess = { state ->
                             coverReady = true
+                            coverBitmap = (state.result.image as? BitmapImage)?.bitmap
                             onCoverSettled()
                         },
                         onError = {
                             coverReady = false
+                            coverBitmap = null
                             onCoverSettled()
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .aspectRatio(aspect.ratio),
+                            .aspectRatio(aspect.ratio)
+                            .background(scheme.surfaceContainerHigh),
                     )
                     if (background != null) {
                         Canvas(Modifier.matchParentSize()) {
@@ -166,9 +173,11 @@ internal fun FeedCard(
                             .aspectRatio(aspect.ratio)
                             .onSizeChanged { coverHeight = it.height },
                     ) {
-                        if (video.playCountText.isNotBlank() ||
-                            video.danmakuText.isNotBlank() ||
-                            video.durationText.isNotBlank()
+                        if (coverReady && (
+                                video.playCountText.isNotBlank() ||
+                                    video.danmakuText.isNotBlank() ||
+                                    video.durationText.isNotBlank()
+                                )
                         ) {
                             Row(
                                 modifier = Modifier

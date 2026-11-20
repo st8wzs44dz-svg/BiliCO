@@ -100,7 +100,7 @@ fun UpdateDialog(
         readyFile = null
         downloadError = null
         progress = 0f
-        progressText = "正在测速并准备下载…"
+        progressText = "正在连接 GitHub 下载…"
         var lastBytes = 0L
         var lastAt = 0L
         var speed = 0L

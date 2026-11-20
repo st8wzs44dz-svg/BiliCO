@@ -23,9 +23,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -57,7 +55,7 @@ data class UpdateApk(val id: Long, val url: String)
 /**
  * GitHub Releases 更新检查与应用内安装包下载器（对齐 Cobo Updater + c001apk InAppUpdater）：
  * - 支持正式版与预发布版（`-pre` / `-beta` / `prerelease=true`）过滤与语义化版本比较
- * - 多镜像（gh-proxy / ghfast / 直连）并发测速择优 + HTTP Range 4 路分片断点续传
+ * - 直连 GitHub Releases + HTTP Range 4 路分片断点续传
  * - 下载完成后校验包名、版本与签名证书，通过 FileProvider 调起系统安装器
  */
 object AppUpdater {
@@ -65,14 +63,7 @@ object AppUpdater {
     const val repositoryUrl = "https://github.com/$REPO"
     private const val API = "https://api.github.com/repos/$REPO/releases?per_page=20"
 
-    private val MIRRORS = listOf(
-        "https://gh-proxy.com/",
-        "https://ghfast.top/",
-        "",
-    )
     private const val SEGMENTS = 4
-    private const val PROBE_BYTES = 64 * 1024L
-    private const val PROBE_TIMEOUT_MS = 1500L
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -192,22 +183,16 @@ object AppUpdater {
             }
         }
 
-        val candidates = raceMirrors(apk.url)
-        var lastError: Throwable? = null
-        for (candidate in candidates) {
-            coroutineContext.ensureActive()
-            try {
-                downloadFromCandidate(candidate, target, onProgress)
-                verifyApkOrThrow(context, target, info.version)
-                return@withContext target
-            } catch (c: CancellationException) {
-                throw c
-            } catch (t: Throwable) {
-                target.delete()
-                lastError = t
-            }
+        try {
+            downloadFromCandidate(apk.url, target, onProgress)
+            verifyApkOrThrow(context, target, info.version)
+            target
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            target.delete()
+            throw t
         }
-        throw lastError ?: IOException("下载更新包失败")
     }
 
     @Suppress("DEPRECATION")
@@ -247,45 +232,6 @@ object AppUpdater {
         } else {
             signatures?.toSet().orEmpty()
         }
-    private suspend fun raceMirrors(url: String): List<String> = coroutineScope {
-        val all = MIRRORS.map { prefix -> if (prefix.isEmpty()) url else prefix + url }
-        val jobs = all.map { candidate ->
-            async(Dispatchers.IO) {
-                withTimeoutOrNull(PROBE_TIMEOUT_MS) {
-                    runCatching {
-                        val req = Request.Builder()
-                            .url(candidate)
-                            .header("User-Agent", "BiliCO-Android")
-                            .header("Range", "bytes=0-${PROBE_BYTES - 1}")
-                            .build()
-                        client.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) return@runCatching null
-                            val stream = resp.body?.byteStream() ?: return@runCatching null
-                            val buf = ByteArray(16 * 1024)
-                            var got = 0L
-                            while (got < PROBE_BYTES) {
-                                val n = stream.read(buf)
-                                if (n < 0) break
-                                got += n
-                            }
-                            if (got >= PROBE_BYTES / 2) candidate else null
-                        }
-                    }.getOrNull()
-                }
-            }
-        }
-        val pending = jobs.toMutableList()
-        var winner: String? = null
-        while (pending.isNotEmpty() && winner == null) {
-            val finished = select {
-                pending.forEach { job -> job.onAwait { job to it } }
-            }
-            pending.remove(finished.first)
-            if (finished.second != null) winner = finished.second
-        }
-        pending.forEach { it.cancel() }
-        if (winner != null) listOf(winner) + all.filter { it != winner } else all
-    }
 
     private data class ProbeResult(val total: Long, val ranged: Boolean)
 
