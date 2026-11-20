@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlin.math.cbrt
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -52,7 +53,7 @@ private val backgroundCache = object : LruCache<BackgroundKey, ImageBitmap>(Back
 // A lazy grid can compose several cards in one frame. Keep thumbnail decoding and blur work bounded.
 private val backgroundWorker = Semaphore(1)
 
-internal val FeedCoverOverlap = 28.dp
+internal val FeedCoverOverlap = 40.dp
 
 @Composable
 internal fun rememberFeedCoverBackground(
@@ -137,37 +138,44 @@ private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
 
     val overlap = key.overlapHeight
     val height = overlap + key.infoHeight
-    val pixels = IntArray(width * height)
-    for (y in 0 until height) {
-        val sourceRow = mirrorIndex(coverHeight + y - overlap, coverHeight)
-        coverPixels.copyInto(pixels, y * width, sourceRow * width, (sourceRow + 1) * width)
+    val padTop = (coverHeight - overlap).coerceAtLeast(0).coerceAtMost(key.blurRadius * 2)
+    val paddedHeight = padTop + height
+    val blurred = IntArray(width * paddedHeight)
+    for (y in 0 until paddedHeight) {
+        val sourceRow = mirrorIndex(coverHeight + y - overlap - padTop, coverHeight)
+        coverPixels.copyInto(blurred, y * width, sourceRow * width, (sourceRow + 1) * width)
     }
 
     // Three separable box passes approximate sigma 20dp at the card's display scale.
-    val transposed = IntArray(pixels.size)
+    val transposed = IntArray(blurred.size)
     repeat(3) {
-        blurRows(pixels, transposed, width, height, key.blurRadius)
-        blurRows(transposed, pixels, height, width, key.blurRadius)
+        blurRows(blurred, transposed, width, paddedHeight, key.blurRadius)
+        blurRows(transposed, blurred, paddedHeight, width, key.blurRadius)
     }
+    val pixels = if (padTop == 0) blurred else blurred.copyOfRange(padTop * width, paddedHeight * width)
 
-    val fadeHeight = (overlap - 1).coerceAtLeast(1)
+    val fadeHeight = (overlap - 2).coerceAtLeast(1)
+    val maxRow = (height - 1).coerceAtLeast(1)
     for (y in 0 until height) {
-        val infoProgress = ((y - overlap + 1f) / key.infoHeight).coerceIn(0f, 1f)
-        // The last sample above the join is already opaque, including after bilinear upscaling.
-        val blend = smoothStep(y.toFloat() / fadeHeight)
+        val progress = y.toFloat() / maxRow
+        // Keep the last two samples above the join opaque, including after bilinear upscaling.
+        val blend = smootherStep(y.toFloat() / fadeHeight)
         val alpha = (255f * blend).roundToInt()
-        val scrim = 1f - 0.22f * infoProgress
-        // White title text and 70%-white metadata need different contrast on near-white images.
-        val maxLuma = 118f - 30f * smoothStep((infoProgress - 0.36f) / 0.22f)
+        val smoothProgress = smootherStep(progress)
+        val scrim = 1f - 0.22f * smoothProgress
+        // White title text and 70%-white metadata need smooth contrast compression on bright covers.
+        val softCap = 118f - 30f * smoothProgress
+        val compressWeight = 0.25f + 0.75f * smootherStep(progress / 0.45f)
         for (x in 0 until width) {
             val index = y * width + x
             val color = pixels[index]
             val r = color shr 16 and 255
             val g = color shr 8 and 255
             val b = color and 255
-            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
-            val contrast = if (luma > maxLuma) maxLuma / luma else 1f
-            val multiplier = minOf(scrim, contrast)
+            val scrimmedLuma = (0.2126f * r + 0.7152f * g + 0.0722f * b) * scrim
+            val ratio = scrimmedLuma / softCap
+            val softGain = 1f / cbrt(1f + ratio * ratio * ratio)
+            val multiplier = scrim * (1f - compressWeight * (1f - softGain))
             pixels[index] = (alpha shl 24) or ((r * multiplier).roundToInt() shl 16) or
                 ((g * multiplier).roundToInt() shl 8) or (b * multiplier).roundToInt()
         }
@@ -175,9 +183,9 @@ private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
     return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888).asImageBitmap()
 }
 
-private fun smoothStep(value: Float): Float {
+private fun smootherStep(value: Float): Float {
     val t = value.coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
+    return t * t * t * (t * (t * 6f - 15f) + 10f)
 }
 
 private fun mirrorIndex(index: Int, length: Int): Int {
