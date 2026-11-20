@@ -100,6 +100,75 @@ class InteractionRepository(
         )
     }
 
+    /**
+     * 后台静默一键切换默认收藏夹状态，返回操作后该视频是否仍处于已收藏状态。
+     * 未收藏时加入默认收藏夹；已收藏时优先移出默认收藏夹（若仅存在于其他自定义收藏夹则一并移出）。
+     */
+    suspend fun toggleDefaultFavorite(aid: Long, targetFavorited: Boolean): Result<Boolean> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                buvid.ensure()
+                val token = csrf()
+                require(token.isNotBlank()) { "登录后可用" }
+                val mid = session.mid().takeIf { it > 0L } ?: (session.account.value?.mid ?: 0L)
+                require(mid > 0L) { "登录后可用" }
+
+                val foldersResp = api.favFolders(mid = mid, rid = aid, type = 2)
+                if (foldersResp.code != 0) {
+                    error(foldersResp.message.ifBlank { "收藏夹加载失败(${foldersResp.code})" })
+                }
+                val folders = foldersResp.data?.list.orEmpty()
+                val defaultFolder = folders.firstOrNull { (it.attr and 2) == 0 }
+                    ?: folders.firstOrNull { it.title == "默认收藏夹" }
+                    ?: folders.firstOrNull()
+                val defaultMediaId = defaultFolder?.let { it.id.takeIf { id -> id > 0L } ?: it.fid } ?: 0L
+                val containingIds = folders.mapNotNull { folder ->
+                    if (folder.fav_state != 1) return@mapNotNull null
+                    (folder.id.takeIf { it > 0L } ?: folder.fid).takeIf { it > 0L }
+                }
+
+                if (targetFavorited) {
+                    require(defaultMediaId > 0L) { "未找到默认收藏夹" }
+                    if (defaultMediaId !in containingIds) {
+                        val resp = api.favoriteResource(
+                            mapOf(
+                                "rid" to aid.toString(),
+                                "type" to "2",
+                                "add_media_ids" to defaultMediaId.toString(),
+                                "del_media_ids" to "",
+                                "csrf" to token,
+                            )
+                        )
+                        if (resp.code != 0) {
+                            error(resp.message.ifBlank { "收藏失败(${resp.code})" })
+                        }
+                    }
+                    true
+                } else {
+                    val delIds = when {
+                        defaultMediaId > 0L && defaultMediaId in containingIds -> listOf(defaultMediaId)
+                        containingIds.isNotEmpty() -> containingIds
+                        else -> emptyList()
+                    }
+                    if (delIds.isNotEmpty()) {
+                        val resp = api.favoriteResource(
+                            mapOf(
+                                "rid" to aid.toString(),
+                                "type" to "2",
+                                "add_media_ids" to "",
+                                "del_media_ids" to delIds.joinToString(","),
+                                "csrf" to token,
+                            )
+                        )
+                        if (resp.code != 0) {
+                            error(resp.message.ifBlank { "取消收藏失败(${resp.code})" })
+                        }
+                    }
+                    containingIds.any { it !in delIds }
+                }
+            }
+        }
+
     suspend fun addToWatchLater(aid: Long): Result<Unit> = post {
         api.addWatchLater(
             mapOf(

@@ -11,6 +11,7 @@ import erl.bilico.data.repository.InteractionRepository
 import erl.bilico.data.repository.VideoRepository
 import erl.bilico.data.session.SessionRepository
 import erl.bilico.data.settings.SettingsRepository
+import erl.bilico.player.PlaybackBridge
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -73,6 +74,36 @@ class VideoViewModel(
 
     init {
         load()
+        viewModelScope.launch {
+            PlaybackBridge.externalInteractions.collect { event ->
+                _state.update { state ->
+                    val current = state.detail ?: return@update state
+                    if (current.aid != event.aid) return@update state
+                    val nextLiked = event.liked ?: state.liked
+                    val nextFavorited = event.favorited ?: state.favorited
+                    if (nextLiked == state.liked && nextFavorited == state.favorited) return@update state
+                    val likeDelta = when {
+                        nextLiked && !state.liked -> 1L
+                        !nextLiked && state.liked -> -1L
+                        else -> 0L
+                    }
+                    val favDelta = when {
+                        nextFavorited && !state.favorited -> 1L
+                        !nextFavorited && state.favorited -> -1L
+                        else -> 0L
+                    }
+                    state.copy(
+                        liked = nextLiked,
+                        disliked = if (nextLiked) false else state.disliked,
+                        favorited = nextFavorited,
+                        detail = current.copy(
+                            like = (current.like + likeDelta).coerceAtLeast(0L),
+                            favorite = (current.favorite + favDelta).coerceAtLeast(0L),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     /**
@@ -329,6 +360,7 @@ class VideoViewModel(
                         detail = current.copy(like = (current.like + delta).coerceAtLeast(0L)),
                     )
                 }
+                PlaybackBridge.updateVideoInteraction(aid = detail.aid, liked = target)
             }
         }
     }
@@ -339,9 +371,11 @@ class VideoViewModel(
         val target = !_state.value.disliked
         interact {
             interactions.dislike(detail.aid, target).onSuccess {
+                var clearedLike = false
                 _state.update { state ->
                     val current = state.detail ?: return@update state
                     val wasLiked = state.liked
+                    if (target && wasLiked) clearedLike = true
                     state.copy(
                         disliked = target,
                         liked = if (target) false else state.liked,
@@ -351,6 +385,9 @@ class VideoViewModel(
                             current
                         },
                     )
+                }
+                if (clearedLike) {
+                    PlaybackBridge.updateVideoInteraction(aid = detail.aid, liked = false)
                 }
             }
         }
@@ -386,12 +423,14 @@ class VideoViewModel(
             interactions.favorite(detail.aid, mediaId).onSuccess {
                 _state.update { state ->
                     val current = state.detail ?: return@update state
+                    val delta = if (state.favorited) 0L else 1L
                     state.copy(
                         favorited = true,
-                        detail = current.copy(favorite = current.favorite + 1),
+                        detail = current.copy(favorite = current.favorite + delta),
                         message = "已收藏",
                     )
                 }
+                PlaybackBridge.updateVideoInteraction(aid = detail.aid, favorited = true)
             }
         }
     }
@@ -431,6 +470,11 @@ class VideoViewModel(
                         favorited = relation.favorite,
                     )
                 }
+                PlaybackBridge.updateVideoInteraction(
+                    aid = aid,
+                    liked = relation.like,
+                    favorited = relation.favorite,
+                )
             }
             if (upMid > 0L) {
                 val following = interactions.isFollowing(upMid)

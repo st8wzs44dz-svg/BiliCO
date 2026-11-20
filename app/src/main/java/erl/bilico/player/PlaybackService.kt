@@ -9,25 +9,43 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.media3.session.legacy.MediaMetadataCompat
-import androidx.media3.session.legacy.MediaSessionCompat
+import android.widget.Toast
+import androidx.annotation.OptIn
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import androidx.media3.session.legacy.MediaMetadataCompat
+import androidx.media3.session.legacy.MediaSessionCompat
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import erl.bilico.BiliCoApplication
 import erl.bilico.MainActivity
+import erl.bilico.R
 import erl.bilico.data.util.Formatters
+import kotlinx.coroutines.launch
 
 /**
- * 后台播放的系统媒体条。进度、播放和暂停都交给 [MediaSession]，系统按播放器的位置自己画进度条。
- * 只留播放/暂停和停止，不接上下一首。
+ * 后台播放的系统媒体条与实时通知。进度、播放和暂停都交给 [MediaSession]，系统按播放器的位置自己画进度条。
+ * 不接上下一首；普通视频在实时通知展开态补充点赞与默认收藏夹一键收藏图标，番剧与直播保持仅播控。
  */
+@OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
+
+    private data class ButtonState(
+        val enabled: Boolean,
+        val liked: Boolean,
+        val favorited: Boolean,
+    )
 
     private var mediaSession: MediaSession? = null
     private var boundPlayer: Player? = null
@@ -36,6 +54,16 @@ class PlaybackService : MediaSessionService() {
     @Volatile
     private var artworkBytes: ByteArray? = null
     private var loadedArtwork: String = ""
+    private var publishedButtonState: ButtonState? = null
+    private var likeInFlight: Boolean = false
+    private var favoriteInFlight: Boolean = false
+
+    override fun onCreate() {
+        super.onCreate()
+        PlaybackBridge.setInteractionListener {
+            mainHandler.post { syncMediaButtons(mediaSession) }
+        }
+    }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
@@ -72,6 +100,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        PlaybackBridge.setInteractionListener(null)
+        publishedButtonState = null
         mediaSession?.release()
         mediaSession = null
         sessionPlayer = null
@@ -84,9 +114,11 @@ class PlaybackService : MediaSessionService() {
         // 封面晚到只补一次。会话已经在前台就不再拆，拆掉会把 startForeground 打断。
         if (boundPlayer === player && mediaSession != null) {
             attachArtwork(mediaSession)
+            syncMediaButtons(mediaSession)
             return
         }
         mediaSession?.release()
+        publishedButtonState = null
         boundPlayer = player
         // 只改媒体条上看到的标题。正在播的地址由播放页自己设，这里换媒体项会把地址换成空的，直接崩。
         val wrapped = object : ForwardingPlayer(player) {
@@ -124,13 +156,129 @@ class PlaybackService : MediaSessionService() {
             openIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val initialButtons = currentButtonState()
         val session = MediaSession.Builder(this, wrapped)
             .setId(SESSION_ID)
             .setSessionActivity(sessionActivity)
             .setCallback(Callback())
+            .setMediaButtonPreferences(buildMediaButtonPreferences(initialButtons))
             .build()
         mediaSession = session
+        publishedButtonState = initialButtons
         attachArtwork(session)
+    }
+
+    private fun currentButtonState(): ButtonState {
+        val interaction = PlaybackBridge.activeVideoInteraction
+        return if (interaction != null && interaction.aid > 0L) {
+            ButtonState(enabled = true, liked = interaction.liked, favorited = interaction.favorited)
+        } else {
+            ButtonState(enabled = false, liked = false, favorited = false)
+        }
+    }
+
+    private fun buildMediaButtonPreferences(state: ButtonState): List<CommandButton> {
+        if (!state.enabled) return emptyList()
+        val likeButton = CommandButton.Builder(
+            if (state.liked) CommandButton.ICON_THUMB_UP_FILLED else CommandButton.ICON_THUMB_UP_UNFILLED,
+        )
+            .setCustomIconResId(
+                if (state.liked) R.drawable.ic_media_like_filled else R.drawable.ic_media_like_outline,
+            )
+            .setDisplayName(if (state.liked) "取消点赞" else "点赞")
+            .setSessionCommand(COMMAND_TOGGLE_LIKE)
+            .setSlots(CommandButton.SLOT_OVERFLOW)
+            .build()
+        val favoriteButton = CommandButton.Builder(
+            if (state.favorited) CommandButton.ICON_STAR_FILLED else CommandButton.ICON_STAR_UNFILLED,
+        )
+            .setCustomIconResId(
+                if (state.favorited) R.drawable.ic_media_favorite_filled else R.drawable.ic_media_favorite_outline,
+            )
+            .setDisplayName(if (state.favorited) "取消收藏" else "收藏")
+            .setSessionCommand(COMMAND_TOGGLE_FAVORITE)
+            .setSlots(CommandButton.SLOT_OVERFLOW)
+            .build()
+        return listOf(likeButton, favoriteButton)
+    }
+
+    private fun syncMediaButtons(session: MediaSession?) {
+        val target = session ?: return
+        val next = currentButtonState()
+        if (next == publishedButtonState) return
+        publishedButtonState = next
+        runCatching {
+            target.setMediaButtonPreferences(buildMediaButtonPreferences(next))
+            onUpdateNotification(target, true)
+        }.onFailure {
+            Log.w(TAG, "实时通知按钮更新失败 ${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    private fun handleToggleLike() {
+        val current = PlaybackBridge.activeVideoInteraction ?: return
+        if (current.aid <= 0L || likeInFlight) return
+        val container = (applicationContext as BiliCoApplication).container
+        if (!container.session.isLoggedIn()) {
+            showToast("登录后可用")
+            return
+        }
+        val aid = current.aid
+        val previous = current.liked
+        val target = !previous
+        likeInFlight = true
+        PlaybackBridge.updateVideoInteraction(aid = aid, liked = target)
+        container.scope.launch {
+            val result = container.interactions.like(aid, target)
+            mainHandler.post {
+                likeInFlight = false
+                result.onSuccess {
+                    PlaybackBridge.updateVideoInteraction(aid = aid, liked = target)
+                    PlaybackBridge.emitExternalInteraction(aid = aid, liked = target)
+                }.onFailure { error ->
+                    Log.w(TAG, "实时通知点赞失败 ${error.message}")
+                    PlaybackBridge.updateVideoInteraction(aid = aid, liked = previous)
+                    showToast(error.message ?: "操作失败")
+                }
+            }
+        }
+    }
+
+    private fun handleToggleFavorite() {
+        val current = PlaybackBridge.activeVideoInteraction ?: return
+        if (current.aid <= 0L || favoriteInFlight) return
+        val container = (applicationContext as BiliCoApplication).container
+        if (!container.session.isLoggedIn()) {
+            showToast("登录后可用")
+            return
+        }
+        val aid = current.aid
+        val previous = current.favorited
+        val target = !previous
+        favoriteInFlight = true
+        PlaybackBridge.updateVideoInteraction(aid = aid, favorited = target)
+        container.scope.launch {
+            val result = container.interactions.toggleDefaultFavorite(aid, target)
+            mainHandler.post {
+                favoriteInFlight = false
+                result.onSuccess { finalFavorited ->
+                    PlaybackBridge.updateVideoInteraction(aid = aid, favorited = finalFavorited)
+                    PlaybackBridge.emitExternalInteraction(aid = aid, favorited = finalFavorited)
+                    if (!target && finalFavorited) {
+                        showToast("已移出默认收藏夹，仍存在于其他收藏夹")
+                    }
+                }.onFailure { error ->
+                    Log.w(TAG, "实时通知收藏失败 ${error.message}")
+                    PlaybackBridge.updateVideoInteraction(aid = aid, favorited = previous)
+                    showToast(error.message ?: "操作失败")
+                }
+            }
+        }
+    }
+
+    private fun showToast(message: String) {
+        if (message.isBlank()) return
+        runCatching { Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show() }
     }
 
     /**
@@ -223,17 +371,38 @@ class PlaybackService : MediaSessionService() {
     private fun download(url: String): ByteArray =
         (applicationContext as BiliCoApplication).container.client.fetchBytes(url)
 
-    private class Callback : MediaSession.Callback {
+    private inner class Callback : MediaSession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
             val hints = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(COMMAND_TOGGLE_LIKE)
+                .add(COMMAND_TOGGLE_FAVORITE)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(hints)
                 .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            return when (customCommand.customAction) {
+                ACTION_TOGGLE_LIKE -> {
+                    handleToggleLike()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_TOGGLE_FAVORITE -> {
+                    handleToggleFavorite()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                else -> super.onCustomCommand(session, controller, customCommand, args)
+            }
         }
     }
 
@@ -243,6 +412,10 @@ class PlaybackService : MediaSessionService() {
         private const val CHANNEL_ID = "bilico_playback"
         private const val HOLD_NOTIFICATION_ID = 1001
         private const val EXTRA_PROMOTE = "promote"
+        private const val ACTION_TOGGLE_LIKE = "erl.bilico.session.TOGGLE_LIKE"
+        private const val ACTION_TOGGLE_FAVORITE = "erl.bilico.session.TOGGLE_FAVORITE"
+        private val COMMAND_TOGGLE_LIKE = SessionCommand(ACTION_TOGGLE_LIKE, Bundle.EMPTY)
+        private val COMMAND_TOGGLE_FAVORITE = SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY)
 
         fun start(context: android.content.Context) {
             val appCtx = context.applicationContext

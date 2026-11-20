@@ -36,8 +36,25 @@ import androidx.media3.exoplayer.ExoPlayer
 import erl.bilico.ui.LocalRouteIsTop
 import erl.bilico.ui.LocalRouteMinimized
 import erl.bilico.ui.Route
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 val LocalInPipMode = compositionLocalOf { false }
+
+/** 当前普通视频播放会话的点赞/收藏状态；番剧、直播及未加载完成时为 null。 */
+data class PlaybackVideoInteraction(
+    val aid: Long,
+    val liked: Boolean,
+    val favorited: Boolean,
+)
+
+/** 从实时通知触发的互动结果，供活跃的 [erl.bilico.feature.video.VideoViewModel] 同步页面状态。 */
+data class PlaybackInteractionEvent(
+    val aid: Long,
+    val liked: Boolean? = null,
+    val favorited: Boolean? = null,
+)
 
 /**
  * 统一管理当前活跃播放器的后台播放、通知栏控制与画中画状态。
@@ -69,6 +86,16 @@ object PlaybackBridge {
     var autoPipEnabled: Boolean = true
         private set
 
+    @Volatile
+    var activeVideoInteraction: PlaybackVideoInteraction? = null
+        private set
+
+    @Volatile
+    private var interactionListener: (() -> Unit)? = null
+
+    private val _externalInteractions = MutableSharedFlow<PlaybackInteractionEvent>(extraBufferCapacity = 16)
+    val externalInteractions: SharedFlow<PlaybackInteractionEvent> = _externalInteractions.asSharedFlow()
+
     var currentTitle by mutableStateOf("")
         private set
 
@@ -92,6 +119,34 @@ object PlaybackBridge {
     var mutedForRouteSwitch: Boolean = false
         private set
 
+    fun setInteractionListener(listener: (() -> Unit)?) {
+        interactionListener = listener
+    }
+
+    fun updateVideoInteraction(
+        aid: Long,
+        liked: Boolean? = null,
+        favorited: Boolean? = null,
+    ) {
+        val current = activeVideoInteraction ?: return
+        if (current.aid != aid) return
+        val updated = current.copy(
+            liked = liked ?: current.liked,
+            favorited = favorited ?: current.favorited,
+        )
+        if (updated == current) return
+        activeVideoInteraction = updated
+        interactionListener?.invoke()
+    }
+
+    fun emitExternalInteraction(
+        aid: Long,
+        liked: Boolean? = null,
+        favorited: Boolean? = null,
+    ) {
+        _externalInteractions.tryEmit(PlaybackInteractionEvent(aid = aid, liked = liked, favorited = favorited))
+    }
+
     fun bind(
         player: Player,
         title: String,
@@ -100,17 +155,23 @@ object PlaybackBridge {
         isPlaying: Boolean,
         autoPip: Boolean,
         owner: Any? = null,
+        videoInteraction: PlaybackVideoInteraction? = null,
     ) {
+        val previousInteraction = activeVideoInteraction
         activeOwner = owner
         activePlayer = player
         activeTitle = title
         activeSubtitle = subtitle
         activeArtworkUrl = artworkUrl
         autoPipEnabled = autoPip
+        activeVideoInteraction = videoInteraction
         currentTitle = title
         currentSubtitle = subtitle
         currentArtworkUrl = artworkUrl
         currentIsPlaying = isPlaying
+        if (previousInteraction != videoInteraction) {
+            interactionListener?.invoke()
+        }
     }
 
     fun isOwner(owner: Any): Boolean = activeOwner === owner
@@ -130,15 +191,20 @@ object PlaybackBridge {
             mutedForRouteSwitch = false
             player.volume = 1f
         }
+        val hadInteraction = activeVideoInteraction != null
         activeOwner = null
         activePlayer = null
         activeTitle = ""
         activeSubtitle = ""
         activeArtworkUrl = ""
+        activeVideoInteraction = null
         currentTitle = ""
         currentSubtitle = ""
         currentArtworkUrl = ""
         currentIsPlaying = false
+        if (hadInteraction) {
+            interactionListener?.invoke()
+        }
     }
 
     fun canMinimizeSession(): Boolean {
@@ -351,6 +417,7 @@ fun BindPlaybackSession(
     isPlaying: Boolean,
     backgroundPlay: Boolean,
     autoPip: Boolean,
+    videoInteraction: PlaybackVideoInteraction? = null,
 ) {
     val context = LocalContext.current
     val activity = LocalContext.current.findPipActivity()
@@ -368,7 +435,17 @@ fun BindPlaybackSession(
     // 重建媒体会话并重载封面，全压在退场那几帧上。缩进融合球不算出栈，会话照常维持。
     val poppingOut = routeEntry?.exiting == true && !routeEntry.minimizingToOrb
 
-    LaunchedEffect(activeSession, player, title, subtitle, artworkUrl, isPlaying, effectiveAutoPip, poppingOut) {
+    LaunchedEffect(
+        activeSession,
+        player,
+        title,
+        subtitle,
+        artworkUrl,
+        isPlaying,
+        effectiveAutoPip,
+        poppingOut,
+        videoInteraction,
+    ) {
         if (!activeSession) return@LaunchedEffect
         if (poppingOut) {
             // 出栈时播放器已经暂停，但退场动画还要跑 240ms，系统这段时间仍按上一次的参数判断
@@ -390,6 +467,7 @@ fun BindPlaybackSession(
             isPlaying = isPlaying,
             autoPip = effectiveAutoPip,
             owner = sessionOwner,
+            videoInteraction = videoInteraction,
         )
         PlaybackService.start(context)
         if (activity != null && PlaybackBridge.canEnterPip(activity)) {

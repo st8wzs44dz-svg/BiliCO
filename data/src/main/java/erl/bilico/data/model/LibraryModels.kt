@@ -22,10 +22,14 @@ data class FavFolderList(
 data class FavFolder(
     val id: Long = 0,
     val fid: Long = 0,
+    @Serializable(with = FlexibleIntSerializer::class)
+    val attr: Int = 0,
     val title: String = "",
     val cover: String = "",
     @Serializable(with = FlexibleIntSerializer::class)
     val media_count: Int = 0,
+    @Serializable(with = FlexibleIntSerializer::class)
+    val fav_state: Int = 0,
 )
 
 @Serializable

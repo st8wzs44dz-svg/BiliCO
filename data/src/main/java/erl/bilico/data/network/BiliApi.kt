@@ -301,6 +301,8 @@ interface BiliApi {
     @GET("x/v3/fav/folder/created/list-all")
     suspend fun favFolders(
         @Query("up_mid") mid: Long,
+        @Query("rid") rid: Long? = null,
+        @Query("type") type: Int? = null,
         @Query("web_location") webLocation: String = "333.1387",
     ): FavFolderResponse
 

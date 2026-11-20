@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import erl.bilico.di.AppContainer
 import erl.bilico.player.BindPlaybackSession
 import erl.bilico.player.PlaybackBridge
+import erl.bilico.player.PlaybackVideoInteraction
 import erl.bilico.ui.NavState
 import kotlinx.coroutines.delay
 
@@ -78,6 +79,13 @@ internal fun VideoPlaybackEffects(
         isPlaying = isPlaying,
         backgroundPlay = backgroundPlay,
         autoPip = autoPip,
+        videoInteraction = state.detail?.takeIf { it.aid > 0L }?.let { detail ->
+            PlaybackVideoInteraction(
+                aid = detail.aid,
+                liked = state.liked,
+                favorited = state.favorited,
+            )
+        },
     )
 
     if (isActiveRoute) {
