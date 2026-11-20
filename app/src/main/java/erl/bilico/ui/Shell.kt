@@ -32,6 +32,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -41,12 +42,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -83,6 +86,7 @@ import io.github.suqi8.coui.kmp.basic.rememberSearchResultsTransitionState
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 
 /** 底栏切页的交叉淡入时长。 */
@@ -248,29 +252,30 @@ fun MainShell(nav: NavState, container: AppContainer) {
         animationSpec = tween(MainTabFadeMillis),
         label = "bangumiTabWeight",
     )
-    // 仅在 graphicsLayer 绘制阶段读取连续进度，横滑与切 Tab 全程纯 GPU alpha 混合、零逐帧重组。
+    // 仅在 placement / graphicsLayer 阶段读取连续进度，横滑与切 Tab 全程纯 GPU alpha 混合、零重组。
     val bangumiProgress: () -> Float = {
         val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
         (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) * tabBangumiWeight.value
     }
-    val showBaseChrome by remember(feedPager, userIsDark) {
+    val baseChromeVisible = remember(feedPager, userIsDark) {
         derivedStateOf { userIsDark || bangumiProgress() < 0.999f }
     }
-    val showDarkChrome by remember(feedPager, userIsDark) {
+    val darkChromeVisible = remember(feedPager, userIsDark) {
         derivedStateOf { !userIsDark && bangumiProgress() > 0.001f }
     }
-    val bangumiBarsDark by remember(feedPager, tab, feedPanelCovering) {
-        derivedStateOf {
-            if (tab != FEED_TAB_INDEX || feedPanelCovering) {
-                false
-            } else {
-                val pagePos = feedPager.currentPage + feedPager.currentPageOffsetFraction
-                (1f - abs(pagePos - 2f)).coerceIn(0f, 1f) >= 0.5f
+    // 状态栏图标反色等滑动停稳后再同步，避免拖动最敏感帧触发 SystemUI Binder IPC 与全局重组。
+    LaunchedEffect(nav, feedPager, tab, feedPanelCovering) {
+        snapshotFlow {
+            when {
+                tab != FEED_TAB_INDEX || feedPanelCovering -> false
+                feedPager.isScrollInProgress -> null
+                else -> feedPager.settledPage == 2
             }
         }
-    }
-    LaunchedEffect(bangumiBarsDark) {
-        nav.mainForceDark = bangumiBarsDark
+            .distinctUntilChanged()
+            .collect { darkBars ->
+                if (darkBars != null) nav.mainForceDark = darkBars
+            }
     }
     DisposableEffect(nav) {
         onDispose { nav.mainForceDark = false }
@@ -278,8 +283,10 @@ fun MainShell(nav: NavState, container: AppContainer) {
 
     val baseChromeAlpha: () -> Float = { if (userIsDark) 1f else (1f - bangumiProgress()) }
     val darkChromeAlpha: () -> Float = bangumiProgress
-    val baseReportsBounds = !showDarkChrome || !bangumiBarsDark
-    val darkReportsBounds = showDarkChrome && bangumiBarsDark
+    // 顶栏/底栏边界与融合球落点仅在分页停稳后切换上报方，拖动全程不触发 MainShell 重组。
+    val settledBangumi = !userIsDark && tab == FEED_TAB_INDEX && segment == 2 && !feedPanelCovering
+    val baseReportsBounds = !settledBangumi
+    val darkReportsBounds = settledBangumi
 
     Box(Modifier.fillMaxSize()) {
         // Layer 1: 页面主内容。保持用户原有全局主题，底层用纯 GPU 影院暗幕无缝渐暗，消除横滑黑白硬切竖缝。
@@ -340,107 +347,105 @@ fun MainShell(nav: NavState, container: AppContainer) {
             }
         }
 
-        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（浅/深两套纯净外壳纯 GPU Alpha 叠化，无 luminance 材质跳变）
-        val renderUnderlay: @Composable (Color, () -> Float, Boolean) -> Unit = { containerColor, alphaProvider, reportBounds ->
-            CompositionLocalProvider(
-                LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-                LocalEdgeToEdge provides true,
-            ) {
-                PinnedBarDensity {
-                    MainBarUnderlay(
-                        tab = tab,
-                        collapsed = collapsed,
-                        feedPager = feedPager,
-                        onSegment = { segment = it },
-                        dynamicPager = dynamicPager,
-                        onDynamicFilter = { dynamicFilterIndex = it },
-                        onFeedReselect = { feedRefreshTick++ },
-                        onDynamicReselect = { dynamicRefreshTick++ },
-                        onDoubleTap = {
-                            when (tab) {
-                                0 -> feedRefreshTick++
-                                1 -> dynamicRefreshTick++
-                            }
-                        },
-                        searchExpanded = searchExpanded,
-                        panelCovering = feedPanelCovering,
-                        bounds = topBarBounds,
-                        reportBounds = reportBounds,
-                        containerColor = containerColor,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .fillMaxWidth()
-                            .graphicsLayer { alpha = alphaProvider() }
-                            .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
-                    )
-                }
-            }
-        }
-        if (showBaseChrome) {
-            renderUnderlay(userPageBg, baseChromeAlpha, baseReportsBounds)
-        }
-        if (showDarkChrome) {
-            BiliCoTheme(darkMode = 2) {
-                renderUnderlay(BangumiCinemaBackground, darkChromeAlpha, darkReportsBounds)
-            }
-        }
-
-        // Layer 3: 悬浮底部导航栏（同样纯 GPU Alpha 双层叠化，稳态仅挂载单层）
-        val context = LocalContext.current
-        val renderBottomBar: @Composable (() -> Float, Boolean) -> Unit = { alphaProvider, reportBounds ->
-            CompositionLocalProvider(
-                LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
-                LocalPlatformBottomBarMaterialEnabled provides false,
-            ) {
-                PinnedBarDensity {
-                    FloatingBottomBar(
-                        tab = tab,
-                        onTab = { target -> if (!feedPanelCovering) nav.setTab(target) },
-                        onReselect = { index ->
-                            if (!feedPanelCovering) {
-                                when (index) {
+        // Layer 2: 顶栏模糊材质层 + 分段胶囊行（浅/深两套常驻热挂载，不可见时跳过 place 零 GPU 与零触摸开销）
+        val renderUnderlay: @Composable (Color, State<Boolean>, () -> Float, Boolean) -> Unit =
+            { containerColor, visibleState, alphaProvider, reportBounds ->
+                CompositionLocalProvider(
+                    LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                    LocalEdgeToEdge provides true,
+                ) {
+                    PinnedBarDensity {
+                        MainBarUnderlay(
+                            tab = tab,
+                            collapsed = collapsed,
+                            feedPager = feedPager,
+                            onSegment = { segment = it },
+                            dynamicPager = dynamicPager,
+                            onDynamicFilter = { dynamicFilterIndex = it },
+                            onFeedReselect = { feedRefreshTick++ },
+                            onDynamicReselect = { dynamicRefreshTick++ },
+                            onDoubleTap = {
+                                when (tab) {
                                     0 -> feedRefreshTick++
                                     1 -> dynamicRefreshTick++
                                 }
-                            }
-                        },
-                        onPrimaryReselect = {
-                            if (!feedPanelCovering) feedPrimaryTapTick++
-                        },
-                        barBounds = if (reportBounds) topBarBounds else null,
-                        orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
-                        leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
-                        onLeftOrbClick = {
-                            if (!feedPanelCovering) {
-                                if (account == null) nav.push(Route.Login) else dynamicComposerOpen = true
-                            }
-                        },
-                        orbOrigin = if (reportBounds) nav.orbOrigin else null,
-                        orbArtworkUrl = PlaybackBridge.currentArtworkUrl,
-                        orbIsPlaying = PlaybackBridge.currentIsPlaying && onMainTab,
-                        onOrbClick = { if (!feedPanelCovering) nav.restoreMinimized() },
-                        onOrbTogglePlay = { PlaybackBridge.togglePlayPause(context) },
-                        onOrbStop = { nav.dismissMinimized(pausePlayback = true) },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .graphicsLayer { alpha = alphaProvider() }
-                            .then(
-                                if (feedPanelCovering || !reportBounds) {
-                                    Modifier.clearAndSetSemantics {}
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    )
+                            },
+                            searchExpanded = searchExpanded,
+                            panelCovering = feedPanelCovering,
+                            bounds = topBarBounds,
+                            reportBounds = reportBounds,
+                            containerColor = containerColor,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .chromeLayerVisibility(visible = visibleState, alphaProvider = alphaProvider)
+                                .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
+                        )
+                    }
                 }
             }
-        }
-        if (showBaseChrome) {
-            renderBottomBar(baseChromeAlpha, baseReportsBounds)
-        }
-        if (showDarkChrome) {
+        renderUnderlay(userPageBg, baseChromeVisible, baseChromeAlpha, baseReportsBounds)
+        if (!userIsDark) {
             BiliCoTheme(darkMode = 2) {
-                renderBottomBar(darkChromeAlpha, darkReportsBounds)
+                renderUnderlay(BangumiCinemaBackground, darkChromeVisible, darkChromeAlpha, darkReportsBounds)
+            }
+        }
+
+        // Layer 3: 悬浮底部导航栏（同样热挂载 + placement 隐藏，消除切入切出首帧冷组合掉帧）
+        val context = LocalContext.current
+        val renderBottomBar: @Composable (State<Boolean>, () -> Float, Boolean) -> Unit =
+            { visibleState, alphaProvider, reportBounds ->
+                CompositionLocalProvider(
+                    LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+                    LocalPlatformBottomBarMaterialEnabled provides false,
+                ) {
+                    PinnedBarDensity {
+                        FloatingBottomBar(
+                            tab = tab,
+                            onTab = { target -> if (!feedPanelCovering) nav.setTab(target) },
+                            onReselect = { index ->
+                                if (!feedPanelCovering) {
+                                    when (index) {
+                                        0 -> feedRefreshTick++
+                                        1 -> dynamicRefreshTick++
+                                    }
+                                }
+                            },
+                            onPrimaryReselect = {
+                                if (!feedPanelCovering) feedPrimaryTapTick++
+                            },
+                            barBounds = if (reportBounds) topBarBounds else null,
+                            orbVisible = if (enteringOverMain) settledOrbVisible else rawOrbVisible,
+                            leftOrbVisible = tab == DYNAMIC_TAB_INDEX,
+                            onLeftOrbClick = {
+                                if (!feedPanelCovering) {
+                                    if (account == null) nav.push(Route.Login) else dynamicComposerOpen = true
+                                }
+                            },
+                            orbOrigin = if (reportBounds) nav.orbOrigin else null,
+                            orbArtworkUrl = PlaybackBridge.currentArtworkUrl,
+                            orbIsPlaying = PlaybackBridge.currentIsPlaying && onMainTab,
+                            onOrbClick = { if (!feedPanelCovering) nav.restoreMinimized() },
+                            onOrbTogglePlay = { PlaybackBridge.togglePlayPause(context) },
+                            onOrbStop = { nav.dismissMinimized(pausePlayback = true) },
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .chromeLayerVisibility(visible = visibleState, alphaProvider = alphaProvider)
+                                .then(
+                                    if (feedPanelCovering || !reportBounds) {
+                                        Modifier.clearAndSetSemantics {}
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
+                        )
+                    }
+                }
+            }
+        renderBottomBar(baseChromeVisible, baseChromeAlpha, baseReportsBounds)
+        if (!userIsDark) {
+            BiliCoTheme(darkMode = 2) {
+                renderBottomBar(darkChromeVisible, darkChromeAlpha, darkReportsBounds)
             }
         }
 
@@ -477,64 +482,63 @@ fun MainShell(nav: NavState, container: AppContainer) {
         }
 
         // Layer 5: 标题行与展开后的 TopAppBarSearchBar（在最顶层，确保搜索胶囊和“取消”按钮不被面板遮挡）
-        val renderTitleRow: @Composable (() -> Float, Boolean) -> Unit = { alphaProvider, reportBounds ->
-            CompositionLocalProvider(
-                LocalBackdrop provides if (BlurEffectsEnabled) {
-                    if (feedPanelCovering) searchBackdrop else backdrop
-                } else {
-                    null
-                },
-                LocalEdgeToEdge provides true,
-            ) {
-                PinnedBarDensity {
-                    MainTitleRow(
-                        tab = tab,
-                        nav = nav,
-                        collapsed = collapsed,
-                        avatarUrl = account?.face,
-                        onAvatarClick = { nav.setTab(ME_TAB_INDEX) },
-                        searchState = searchState,
-                        onQueryChange = searchViewModel::onQueryChange,
-                        searchExpanded = searchExpanded,
-                        onSearchOpen = openFeedSearch,
-                        onSearchCancel = cancelFeedSearch,
-                        onSearchSubmit = submitHomeSearch,
-                        showingResults = searchTransition.filtersVisible,
-                        onTabChange = searchViewModel::setTab,
-                        onSortMenuOpen = { sortMenuExpanded = true },
-                        panelAlpha = { panelAlpha.value },
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .fillMaxWidth()
-                            .graphicsLayer { alpha = alphaProvider() }
-                            .then(
-                                if (reportBounds && feedPanelCovering) {
-                                    Modifier.reportTopBarBottom(topBarBounds)
-                                } else {
-                                    Modifier
-                                },
-                            )
-                            .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
-                    )
-                    // 排序圆钮的菜单宿主：圆钮画在 FeedTitleRow 的胶囊行里，这里只把锚点落到它身上。
-                    if (reportBounds && feedPanelCovering && showingResults) {
-                        SearchSortMenuHost(
-                            expanded = sortMenuExpanded,
-                            onExpandedChange = { sortMenuExpanded = it },
-                            state = searchState,
-                            viewModel = searchViewModel,
-                            modifier = Modifier.align(Alignment.TopCenter),
+        val renderTitleRow: @Composable (State<Boolean>, () -> Float, Boolean) -> Unit =
+            { visibleState, alphaProvider, reportBounds ->
+                CompositionLocalProvider(
+                    LocalBackdrop provides if (BlurEffectsEnabled) {
+                        if (feedPanelCovering) searchBackdrop else backdrop
+                    } else {
+                        null
+                    },
+                    LocalEdgeToEdge provides true,
+                ) {
+                    PinnedBarDensity {
+                        MainTitleRow(
+                            tab = tab,
+                            nav = nav,
+                            collapsed = collapsed,
+                            avatarUrl = account?.face,
+                            onAvatarClick = { nav.setTab(ME_TAB_INDEX) },
+                            searchState = searchState,
+                            onQueryChange = searchViewModel::onQueryChange,
+                            searchExpanded = searchExpanded,
+                            onSearchOpen = openFeedSearch,
+                            onSearchCancel = cancelFeedSearch,
+                            onSearchSubmit = submitHomeSearch,
+                            showingResults = searchTransition.filtersVisible,
+                            onTabChange = searchViewModel::setTab,
+                            onSortMenuOpen = { sortMenuExpanded = true },
+                            panelAlpha = { panelAlpha.value },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .chromeLayerVisibility(visible = visibleState, alphaProvider = alphaProvider)
+                                .then(
+                                    if (reportBounds && feedPanelCovering) {
+                                        Modifier.reportTopBarBottom(topBarBounds)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .then(if (reportBounds) Modifier else Modifier.clearAndSetSemantics {}),
                         )
+                        // 排序圆钮的菜单宿主：圆钮画在 FeedTitleRow 的胶囊行里，这里只把锚点落到它身上。
+                        if (reportBounds && feedPanelCovering && showingResults) {
+                            SearchSortMenuHost(
+                                expanded = sortMenuExpanded,
+                                onExpandedChange = { sortMenuExpanded = it },
+                                state = searchState,
+                                viewModel = searchViewModel,
+                                modifier = Modifier.align(Alignment.TopCenter),
+                            )
+                        }
                     }
                 }
             }
-        }
-        if (showBaseChrome) {
-            renderTitleRow(baseChromeAlpha, baseReportsBounds)
-        }
-        if (showDarkChrome) {
+        renderTitleRow(baseChromeVisible, baseChromeAlpha, baseReportsBounds)
+        if (!userIsDark) {
             BiliCoTheme(darkMode = 2) {
-                renderTitleRow(darkChromeAlpha, darkReportsBounds)
+                renderTitleRow(darkChromeVisible, darkChromeAlpha, darkReportsBounds)
             }
         }
 
@@ -554,6 +558,27 @@ fun MainShell(nav: NavState, container: AppContainer) {
         }
     }
 }
+
+/**
+ * 保持浅/深双层外壳始终热挂载与已测量，避免滑动切入/切出首帧冷组合或卸载 COUI 玻璃组件导致掉帧；
+ * 不可见时在 placement 阶段跳过 place，彻底免除 GPU 绘制、Backdrop 模糊采样与触摸命中测试，
+ * 且状态读取完全隔离在 placement / graphicsLayer 阶段，不触发外壳任何重组。
+ */
+private fun Modifier.chromeLayerVisibility(
+    visible: State<Boolean>,
+    alphaProvider: () -> Float,
+): Modifier = this
+    .layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        layout(placeable.width, placeable.height) {
+            if (visible.value) {
+                placeable.place(0, 0)
+            }
+        }
+    }
+    .graphicsLayer {
+        alpha = alphaProvider()
+    }
 
 @Composable
 private fun MainBarUnderlay(

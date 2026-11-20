@@ -95,7 +95,7 @@ fun BangumiRankSection(
     onCollapse: (Float) -> Unit,
     refreshTick: Int,
     primaryTapTick: Int = 0,
-    pagerScrolling: Boolean = false,
+    pagerScrolling: () -> Boolean = { false },
 ) {
     val viewModel: BangumiRankViewModel = viewModel { BangumiRankViewModel(container.pgc) }
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -199,7 +199,8 @@ fun BangumiRankSection(
                         card = card,
                         coverWidthPx = coverWidthPx,
                         coverHeightPx = coverHeightPx,
-                        generateBlur = active && visible && !pagerScrolling,
+                        generateBlur = active && visible,
+                        pauseBlur = pagerScrolling,
                         onClick = { nav.push(Route.Pgc(card.seasonId, 0L)) },
                     )
                 }
@@ -220,6 +221,7 @@ internal fun BangumiRankCard(
     coverHeightPx: Int,
     onClick: () -> Unit,
     generateBlur: Boolean = true,
+    pauseBlur: () -> Boolean = { false },
 ) {
     val density = LocalDensity.current
     val coverUrl = remember(card.cover, coverWidthPx, coverHeightPx) {
@@ -235,6 +237,7 @@ internal fun BangumiRankCard(
         cardSize = cardSize,
         infoHeight = infoHeight,
         generateBlur = generateBlur,
+        pauseBlur = pauseBlur,
     )
     val blurAlpha by animateFloatAsState(
         targetValue = if (posterBlur != null) 1f else 0f,

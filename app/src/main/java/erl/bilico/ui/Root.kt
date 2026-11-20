@@ -310,16 +310,12 @@ internal fun BiliCoRoot(
         val topEntry = nav.stack.lastOrNull { !it.exiting }
         val topRoute = topEntry?.route
         val inPipMode = LocalInPipMode.current
-        val pageForceDark = (topRoute == Route.Main && nav.mainForceDark) || topRoute == Route.BangumiFollow
-        val effectiveDark = dark || pageForceDark
-        val wantLightStatusBars = !effectiveDark &&
-            viewerHost.active == null &&
-            (topEntry == null || !topEntry.route.isPlayback() || inPipMode || topEntry.collapsedBarVisible)
-        SyncStatusBarAppearance(
-            lightStatusBars = wantLightStatusBars,
-            dark = effectiveDark,
+        RootStatusBarSync(
+            nav = nav,
+            dark = dark,
+            viewerActive = viewerHost.active != null,
+            inPipMode = inPipMode,
             orientation = configuration.orientation,
-            syncTick = nav.statusBarSyncTick,
         )
         val showSecondaryOrb = !inPipMode &&
             nav.minimizedEntry != null &&
@@ -598,3 +594,28 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         is Route.Search -> SearchScreen(container, nav, route.query)
     }
 }
+
+/** 独立的状态栏外观同步叶子节点，隔离 nav.mainForceDark / statusBarSyncTick 变化，避免引发 BiliCoRoot 重组。 */
+@Composable
+private fun RootStatusBarSync(
+    nav: NavState,
+    dark: Boolean,
+    viewerActive: Boolean,
+    inPipMode: Boolean,
+    orientation: Int,
+) {
+    val topEntry = nav.stack.lastOrNull { !it.exiting }
+    val topRoute = topEntry?.route
+    val pageForceDark = (topRoute == Route.Main && nav.mainForceDark) || topRoute == Route.BangumiFollow
+    val effectiveDark = dark || pageForceDark
+    val wantLightStatusBars = !effectiveDark &&
+        !viewerActive &&
+        (topEntry == null || !topEntry.route.isPlayback() || inPipMode || topEntry.collapsedBarVisible)
+    SyncStatusBarAppearance(
+        lightStatusBars = wantLightStatusBars,
+        dark = effectiveDark,
+        orientation = orientation,
+        syncTick = nav.statusBarSyncTick,
+    )
+}
+

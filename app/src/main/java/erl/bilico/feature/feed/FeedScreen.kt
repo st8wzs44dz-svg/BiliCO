@@ -67,7 +67,7 @@ fun FeedScreen(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 0,
+            beyondViewportPageCount = 1,
             key = { FEED_SEGMENTS[it] },
         ) { page ->
             when (page) {
@@ -102,7 +102,7 @@ fun FeedScreen(
                     onCollapse = onCollapse,
                     refreshTick = refreshTick,
                     primaryTapTick = primaryTapTick,
-                    pagerScrolling = pagerState.isScrollInProgress,
+                    pagerScrolling = { pagerState.isScrollInProgress },
                 )
 
                 3 -> LiveListScreen(

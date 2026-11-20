@@ -11,7 +11,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +29,7 @@ import coil3.size.Scale
 import coil3.toBitmap
 import erl.bilico.data.util.Formatters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -63,9 +66,11 @@ internal fun rememberBangumiPosterBlur(
     cardSize: IntSize,
     infoHeight: Int,
     generateBlur: Boolean,
+    pauseBlur: () -> Boolean = { false },
 ): ImageBitmap? {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val latestPauseBlur by rememberUpdatedState(pauseBlur)
     val key = remember(coverUrl, cardSize, infoHeight, density) {
         if (coverUrl.isBlank() || cardSize.width <= 0 || cardSize.height <= 0 || infoHeight <= 0) {
             null
@@ -90,6 +95,9 @@ internal fun rememberBangumiPosterBlur(
     var blur by remember(key) { mutableStateOf(key?.let { posterBlurCache.get(it) }) }
     LaunchedEffect(key, coverReady, generateBlur) {
         if (key == null || !coverReady || !generateBlur || blur != null) return@LaunchedEffect
+        if (latestPauseBlur()) {
+            snapshotFlow { latestPauseBlur() }.first { !it }
+        }
         val thumbnailWidth = with(density) { 48.dp.roundToPx() }.coerceAtLeast(1)
         val thumbnailUrl = Formatters.sizedImageUrl(
             originalUrl,
