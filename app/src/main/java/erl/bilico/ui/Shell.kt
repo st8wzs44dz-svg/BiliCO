@@ -49,7 +49,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
@@ -94,6 +97,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /** 底栏切页的交叉淡入时长。 */
 private const val MainTabFadeMillis = 220
@@ -628,10 +632,39 @@ fun MainShell(nav: NavState, container: AppContainer) {
     }
 }
 
+private val ChromeShadowOutsetDp = 56.dp
+
+/**
+ * 连同溢出组件布局边界的悬浮外阴影一起做透明度过渡。
+ *
+ * `graphicsLayer { alpha < 1f }` 即便 `clip = false`，在 `0f < alpha < 1f` 期间也会隐式分配一张
+ * 按节点布局边界（如 44dp 顶栏高度）裁切的离屏层，把右上角圆形玻璃按钮向下扩散的外阴影硬截成
+ * 半透明灰色矩形色块。用外扩 `56.dp` 阴影余量的 `saveLayer` 替代，静止态 `alpha >= 1f` 直接绘制零离屏开销。
+ */
+internal fun Modifier.unclippedShadowOpacity(alphaProvider: () -> Float): Modifier = drawWithCache {
+    val paint = Paint()
+    val outset = ceil(ChromeShadowOutsetDp.toPx())
+    val bounds = Rect(-outset, -outset, size.width + outset, size.height + outset)
+    onDrawWithContent {
+        val opacity = alphaProvider().coerceIn(0f, 1f)
+        if (opacity >= 0.999f) {
+            drawContent()
+        } else if (opacity > 0.001f) {
+            paint.alpha = opacity
+            drawContext.canvas.saveLayer(bounds, paint)
+            try {
+                drawContent()
+            } finally {
+                drawContext.canvas.restore()
+            }
+        }
+    }
+}
+
 /**
  * 保持浅/深双层外壳始终热挂载与已测量，避免滑动切入/切出首帧冷组合或卸载 COUI 玻璃组件导致掉帧；
  * 不可见时在 placement 阶段跳过 place，彻底免除 GPU 绘制、Backdrop 模糊采样与触摸命中测试，
- * 且状态读取完全隔离在 placement / graphicsLayer 阶段，不触发外壳任何重组。
+ * 且状态读取完全隔离在 placement / draw 阶段，不触发外壳任何重组。
  */
 private fun Modifier.chromeLayerVisibility(
     visible: State<Boolean>,
@@ -645,9 +678,7 @@ private fun Modifier.chromeLayerVisibility(
             }
         }
     }
-    .graphicsLayer {
-        alpha = alphaProvider()
-    }
+    .unclippedShadowOpacity(alphaProvider)
 
 @Composable
 private fun MainBarUnderlay(

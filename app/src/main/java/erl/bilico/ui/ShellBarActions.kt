@@ -181,8 +181,8 @@ internal fun PageTitleBar(
                     .padding(end = TopAppBarDefaults.ActionIconPadding)
                     .graphicsLayer {
                         translationY = -collapsed() * titleHeightPx / 2f
-                        alpha = 1f - collapsed()
-                    },
+                    }
+                    .unclippedShadowOpacity { 1f - collapsed() },
                 horizontalArrangement = Arrangement.spacedBy(
                     TopAppBarDefaults.ActionMenuItemSpacing,
                     Alignment.End,
