@@ -26,7 +26,7 @@ android {
         targetSdk = 37
         versionCode = 150
         versionName = "0.3.2-pre.10"
-        buildConfigField("String", "UPDATE_REPOSITORY", "\"astarion1965974/BiliCO\"")
+        buildConfigField("String", "UPDATE_REPOSITORY", "\"st8wzs44dz-svg/BiliCO\"")
     }
 
     signingConfigs {
