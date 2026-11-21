@@ -12,6 +12,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody.Companion.asResponseBody
+import okio.GzipSource
+import okio.buffer
+import okio.source
+import org.brotli.dec.BrotliInputStream
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.util.concurrent.TimeUnit
@@ -25,6 +30,41 @@ private val biliJson = Json {
     isLenient = true
     coerceInputValues = true
     explicitNulls = false
+}
+
+/** 复用现有 brotli 解码器为 B 站 JSON 接口启用 br/gzip 压缩，减少响应体积与射频唤醒时长。 */
+private class BrotliApiInterceptor : okhttp3.Interceptor {
+    override fun intercept(chain: okhttp3.Interceptor.Chain): Response {
+        val request = chain.request()
+        if (request.header("Accept-Encoding") != null || request.url.host !in BROTLI_API_HOSTS) {
+            return chain.proceed(request)
+        }
+        val response = chain.proceed(
+            request.newBuilder()
+                .header("Accept-Encoding", "br, gzip")
+                .build(),
+        )
+        val encoding = response.header("Content-Encoding")?.lowercase() ?: return response
+        val body = response.body
+        val decoded = when (encoding) {
+            "br" -> BrotliInputStream(body.byteStream()).source().buffer()
+            "gzip" -> GzipSource(body.source()).buffer()
+            else -> return response
+        }
+        return response.newBuilder()
+            .removeHeader("Content-Encoding")
+            .removeHeader("Content-Length")
+            .body(decoded.asResponseBody(body.contentType(), -1L))
+            .build()
+    }
+
+    private companion object {
+        val BROTLI_API_HOSTS = setOf(
+            "api.bilibili.com",
+            "api.live.bilibili.com",
+            "app.bilibili.com",
+        )
+    }
 }
 
 private class BiliHeaderInterceptor : okhttp3.Interceptor {
@@ -63,6 +103,7 @@ class BiliClient(
         .dns(dns)
         .cookieJar(cookieStore)
         .addInterceptor(BiliHeaderInterceptor())
+        .addInterceptor(BrotliApiInterceptor())
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)

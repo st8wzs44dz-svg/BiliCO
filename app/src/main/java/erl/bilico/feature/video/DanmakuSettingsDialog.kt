@@ -155,6 +155,11 @@ internal fun DanmakuSettingsDialog(
                         selected = settings.massiveMode,
                         onClick = { repository.setDanmakuMassiveMode(!settings.massiveMode) },
                     )
+                    FilterChip(
+                        label = "60Hz 省电",
+                        selected = settings.cap60Fps,
+                        onClick = { repository.setDanmakuCap60Fps(!settings.cap60Fps) },
+                    )
                 }
 
                 SectionHeader("显示区域")

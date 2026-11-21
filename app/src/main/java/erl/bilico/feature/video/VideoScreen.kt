@@ -370,8 +370,9 @@ fun VideoScreen(
 
     val barBackdrops = rememberVideoBarBackdrops(pageContainerColor())
 
-    // HDR 档位必须走 SurfaceView：TextureView 由 GPU 合成，HDR 画面会被当成 SDR 铺到屏幕上（发暗）。
-    val hdrSurface = state.source?.isHdr == true
+    // HDR 档位必须走 SurfaceView；开启「省电渲染」时普通 SDR 视频同样优先使用 SurfaceView（复用替身帧转场）。
+    val preferSurfaceView by container.settings.preferSurfaceView.collectAsStateWithLifecycle()
+    val hdrSurface = state.source?.isHdr == true || preferSurfaceView
 
     val detailAid = state.detail?.aid ?: 0L
     val openSponsor = if (state.selectedCid > 0L) ({ sponsorSubmitVisible = true }) else null
@@ -557,6 +558,46 @@ fun VideoScreen(
                     }
                 },
                 onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
+                onCacheVideo = state.source?.let { src ->
+                    {
+                        scope.launch {
+                            val res = container.downloads.enqueue(
+                                bvid = bvid,
+                                cid = state.selectedCid,
+                                title = state.detail?.title.orEmpty(),
+                                upName = state.detail?.upName.orEmpty(),
+                                coverUrl = state.detail?.cover.orEmpty(),
+                                source = src,
+                                kind = erl.bilico.data.model.DownloadKind.VIDEO,
+                            )
+                            res.onSuccess { added ->
+                                viewModel.showMessage(if (added) "已加入离线缓存，可在「我的 → 离线缓存」查看或导出" else "该视频已在缓存队列中")
+                            }.onFailure { err ->
+                                viewModel.showMessage(err.message ?: "缓存失败")
+                            }
+                        }
+                    }
+                },
+                onCacheAudio = state.source?.takeIf { !it.audioUrl.isNullOrBlank() }?.let { src ->
+                    {
+                        scope.launch {
+                            val res = container.downloads.enqueue(
+                                bvid = bvid,
+                                cid = state.selectedCid,
+                                title = state.detail?.title.orEmpty(),
+                                upName = state.detail?.upName.orEmpty(),
+                                coverUrl = state.detail?.cover.orEmpty(),
+                                source = src,
+                                kind = erl.bilico.data.model.DownloadKind.AUDIO_ONLY,
+                            )
+                            res.onSuccess { added ->
+                                viewModel.showMessage(if (added) "已加入音频缓存，可在「我的 → 离线缓存」导出 M4A" else "该音频已在缓存队列中")
+                            }.onFailure { err ->
+                                viewModel.showMessage(err.message ?: "缓存失败")
+                            }
+                        }
+                    }
+                },
                 onSeekCommentMs = { ms ->
                     player?.seekTo(ms)
                     if (player?.isPlaying == false) player.play()

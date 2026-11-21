@@ -317,7 +317,7 @@ internal fun VideoAction(
         modifier = modifier
             .clip(SquircleShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(icon, label, Modifier.size(22.dp), tint = tint)

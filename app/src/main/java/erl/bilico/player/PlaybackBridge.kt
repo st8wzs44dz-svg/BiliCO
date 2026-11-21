@@ -422,11 +422,33 @@ fun buildConfiguredExoPlayer(
                 }
             }
         }
+    val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            /* minBufferMs = */ 20_000,
+            /* maxBufferMs = */ 60_000,
+            /* bufferForPlaybackMs = */ 1_500,
+            /* bufferForPlaybackAfterRebufferMs = */ 3_000,
+        )
+        .build()
     return ExoPlayer.Builder(context, renderersFactory)
+        .setLoadControl(loadControl)
         .setAudioAttributes(attrs, true)
         .setHandleAudioBecomingNoisy(true)
         .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
         .build()
+        .apply {
+            // 纯音频（听视频）及后台播放时允许将解码卸载到低功耗音频 DSP，显著降低息屏播放功耗。
+            val offloadPrefs = androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                .setAudioOffloadMode(
+                    androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED,
+                )
+                .setIsGaplessSupportRequired(false)
+                .setIsSpeedChangeSupportRequired(false)
+                .build()
+            trackSelectionParameters = trackSelectionParameters.buildUpon()
+                .setAudioOffloadPreferences(offloadPrefs)
+                .build()
+        }
 }
 
 @Composable
@@ -501,6 +523,7 @@ fun BindPlaybackSession(
     }
 
     DisposableEffect(player, lifecycleOwner) {
+        var videoDisabledForBg = false
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_STOP -> {
@@ -508,6 +531,13 @@ fun BindPlaybackSession(
                     val inPip = activity?.isInPictureInPictureMode == true
                     if (!inPip) {
                         if (currentBackgroundPlay.value && player.isPlaying) {
+                            // 退到后台纯音频播放时关闭视频轨，停掉硬件视频解码器并省去视频流拉取。
+                            if (!videoDisabledForBg) {
+                                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                                    .build()
+                                videoDisabledForBg = true
+                            }
                             PlaybackService.promote(context)
                         } else if (player.isPlaying) {
                             player.pause()
@@ -516,7 +546,14 @@ fun BindPlaybackSession(
                     }
                 }
 
-                Lifecycle.Event.ON_START -> Unit
+                Lifecycle.Event.ON_START -> {
+                    if (videoDisabledForBg) {
+                        videoDisabledForBg = false
+                        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                            .build()
+                    }
+                }
 
                 else -> Unit
             }
@@ -524,6 +561,14 @@ fun BindPlaybackSession(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            if (videoDisabledForBg) {
+                videoDisabledForBg = false
+                runCatching {
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                        .build()
+                }
+            }
             // 收进融合球的那一页动画期间会被拆掉重建，重建出来的一版 stageReady 归零、播放器槽位消失，
             // 于是这一次解绑发生在「球已经接手」之后。此时清掉桥，球就会变成无封面 + 暂停图标，
             // 菜单里的「继续播放」也因为拿不到播放器点不动。收进球里的页面仍在，绑定交给它新的一版。

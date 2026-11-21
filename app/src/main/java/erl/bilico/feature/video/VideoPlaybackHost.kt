@@ -69,7 +69,8 @@ internal fun VideoPlaybackEffects(
     // 片源请求头与数据源只在这里构造：调用方只有拿到播放器才会组合进来，不进场就不碰 OkHttp。
     val headers = remember(bvid) { container.client.mediaRequestHeaders(bvid) }
     val dataSourceFactory = remember(headers) {
-        OkHttpDataSource.Factory(container.client.mediaClient()).setDefaultRequestProperties(headers)
+        val upstream = OkHttpDataSource.Factory(container.client.mediaClient()).setDefaultRequestProperties(headers)
+        erl.bilico.player.PlaybackMediaCache.wrap(container.appContext, upstream)
     }
 
     BindPlaybackSession(

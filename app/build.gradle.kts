@@ -24,8 +24,8 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 149
-        versionName = "0.3.2-pre.9"
+        versionCode = 150
+        versionName = "0.3.2-pre.10"
         buildConfigField("String", "UPDATE_REPOSITORY", "\"astarion1965974/BiliCO\"")
     }
 
@@ -95,6 +95,10 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
+}
+
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
 }
 
 dependencies {

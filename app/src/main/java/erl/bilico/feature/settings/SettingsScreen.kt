@@ -74,6 +74,7 @@ fun SettingsScreen(
     val cdnOption by container.settings.cdnOption.collectAsStateWithLifecycle()
     val httpDnsEnabled by container.settings.httpDnsEnabled.collectAsStateWithLifecycle()
     val decoderMode by container.settings.decoderMode.collectAsStateWithLifecycle()
+    val preferSurfaceView by container.settings.preferSurfaceView.collectAsStateWithLifecycle()
     val feedSource by container.settings.feedSource.collectAsStateWithLifecycle()
     val inAppBackgroundPlay by container.settings.inAppBackgroundPlay.collectAsStateWithLifecycle()
     val backgroundPlay by container.settings.backgroundPlay.collectAsStateWithLifecycle()
@@ -192,6 +193,14 @@ fun SettingsScreen(
                     modifier = Modifier.testTag("settings_decoder_mode"),
                     cardListPosition = CardListPosition.Middle,
                     onSelectedIndexChange = container.settings::setDecoderMode,
+                )
+                SwitchPreference(
+                    checked = preferSurfaceView,
+                    onCheckedChange = container.settings::setPreferSurfaceView,
+                    title = "省电渲染（SurfaceView 优先）",
+                    summary = "普通 SDR 视频改用 SurfaceView 硬件直出，降低高码率播放 GPU 功耗",
+                    modifier = Modifier.testTag("settings_prefer_surface_view"),
+                    cardListPosition = CardListPosition.Middle,
                 )
                 SwitchPreference(
                     checked = inAppBackgroundPlay,
@@ -384,15 +393,18 @@ fun SettingsScreen(
                 )
                 PreferenceDivider()
                 ArrowPreference(
-                    title = "清除图片缓存",
+                    title = "清除图片与播放缓存",
                     modifier = Modifier.testTag("settings_cache"),
-                    summary = if (cacheCleared > 0) "已清除" else "只清本地图片，不影响账号",
+                    summary = if (cacheCleared > 0) "已清除" else "清理本地图片与边播边存缓冲，不影响账号与离线缓存",
                     cardListPosition = CardListPosition.Tail,
                     onClick = {
                         scope.launch {
                             val loader = SingletonImageLoader.get(context)
                             loader.diskCache?.clear()
                             loader.memoryCache?.clear()
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                erl.bilico.player.PlaybackMediaCache.clear(context)
+                            }
                             cacheCleared++
                         }
                     },

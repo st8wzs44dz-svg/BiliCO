@@ -10,6 +10,7 @@ import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.size.Precision
 import erl.bilico.di.AppContainer
 import okio.Path.Companion.toOkioPath
 
@@ -26,6 +27,7 @@ class BiliCoApplication : Application(), SingletonImageLoader.Factory {
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
+            .precision(Precision.INEXACT)
             .components {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     add(AnimatedImageDecoder.Factory())

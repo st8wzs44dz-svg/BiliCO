@@ -250,8 +250,9 @@ fun PgcScreen(
         val headers = container.client.mediaRequestHeaders().toMutableMap().apply {
             put("Referer", referer)
         }
-        val dataSourceFactory = OkHttpDataSource.Factory(container.client.mediaClient())
+        val upstreamFactory = OkHttpDataSource.Factory(container.client.mediaClient())
             .setDefaultRequestProperties(headers)
+        val dataSourceFactory = erl.bilico.player.PlaybackMediaCache.wrap(container.appContext, upstreamFactory)
         val resumeAt = viewModel.state.value.resumePositionMs
         val mediaId = playbackMediaId(currentEp?.bvid.orEmpty(), currentEp?.cid ?: 0L, source.videoUrl)
         // 页面被重建（最小化进融合球/复原）时播放器没换，重复装载会让番剧从 0 重新播。
@@ -364,8 +365,9 @@ fun PgcScreen(
         commentListState.scrollToItem(0)
     }
 
-    // HDR 档位必须走 SurfaceView：TextureView 由 GPU 合成，HDR 画面会被当成 SDR 铺到屏幕上（发暗）。
-    val hdrSurface = state.source?.isHdr == true
+    // HDR 档位必须走 SurfaceView；开启「省电渲染」时普通 SDR 同样优先使用 SurfaceView（复用替身帧转场）。
+    val preferSurfaceView by container.settings.preferSurfaceView.collectAsStateWithLifecycle()
+    val hdrSurface = state.source?.isHdr == true || preferSurfaceView
 
     VideoFullscreenStage(
         fullscreen = fullscreen,
