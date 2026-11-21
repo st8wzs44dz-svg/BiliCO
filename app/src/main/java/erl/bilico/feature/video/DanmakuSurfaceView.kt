@@ -242,18 +242,20 @@ internal class DanmakuSurfaceView(context: Context) : View(context), Choreograph
     /** 检查当前时间点是否有可见弹幕；若无则返回下一条即将入场的延迟（ms，<=0 表示存在可见弹幕）。 */
     private fun nextVisibleDelayMs(nowMs: Double, playSpeed: Double): Long {
         if (selectedHit != null) return 0L
-        var nextStart = Long.MAX_VALUE
-        for (i in placed.indices) {
-            val entry = placed[i]
-            if (entry.startMs <= nowMs && nowMs <= entry.endMs) {
-                return 0L
-            }
-            if (entry.startMs > nowMs) {
-                nextStart = entry.startMs
-                break
-            }
+        val scrollDuration = settings.scrollDurationMs.toDouble()
+        val fixedDuration = FIXED_DURATION_MS.toDouble()
+        val maxDuration = max(scrollDuration, fixedDuration)
+        val end = firstAfter(placed, nowMs.toLong() + 1L)
+        val minTime = (nowMs - maxDuration - FADE_MS).toLong()
+        for (index in end - 1 downTo 0) {
+            val entry = placed[index]
+            val startTime = entry.item.timeMs
+            if (startTime < minTime) break
+            val duration = if (entry.type == DanmakuType.SCROLL) scrollDuration else fixedDuration
+            val elapsed = nowMs - startTime.toDouble()
+            if (elapsed in 0.0..duration) return 0L
         }
-        if (nextStart == Long.MAX_VALUE) return IDLE_MAX_SLEEP_MS
+        val nextStart = placed.getOrNull(end)?.item?.timeMs ?: return IDLE_MAX_SLEEP_MS
         val wallWaitMs = ((nextStart - nowMs) / playSpeed).toLong()
         return wallWaitMs.coerceIn(IDLE_MIN_SLEEP_MS, IDLE_MAX_SLEEP_MS)
     }
