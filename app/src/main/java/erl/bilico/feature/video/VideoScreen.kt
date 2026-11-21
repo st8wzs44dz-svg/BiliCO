@@ -134,7 +134,13 @@ fun VideoScreen(
     val staysInOrb = isMinimized || playbackEntry?.minimizingToOrb == true
     // 缩进融合球时进度恒为 0、等不到「落位」，但球上的封面和播放状态要靠这一页的会话维持，
     // 所以最小化期间照旧保留播放器槽位与事件监听。
-    val player = if (stageReady || isMinimized) rememberPlaybackPlayer("video") { buildConfiguredExoPlayer(context) } else null
+    val player = if (stageReady || isMinimized) {
+        rememberPlaybackPlayer("video") {
+            buildConfiguredExoPlayer(context, container.settings.decoderMode.value)
+        }
+    } else {
+        null
+    }
     // 页面被弹出（最小化不算）时释放播放器：一台准备好的播放器会占住几十 MB 的加载缓冲。
     DisposableEffect(playbackEntry) {
         playbackEntry?.onDiscard = {
@@ -248,6 +254,7 @@ fun VideoScreen(
     var playIntent by remember(player) { mutableStateOf(player?.hasPlayIntent() == true) }
     var isBuffering by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    var audioOnly by remember(bvid) { mutableStateOf(false) }
 
     LaunchedEffect(isTop, staysInOrb) {
         if (!isTop) {
@@ -270,6 +277,7 @@ fun VideoScreen(
             isTop = isTop,
             isActiveRoute = isActiveRoute,
             isPlaying = isPlaying,
+            audioOnly = audioOnly,
             state = state,
             viewModel = viewModel,
             container = container,
@@ -441,6 +449,52 @@ fun VideoScreen(
                     playerError = playerError,
                     message = message,
                     hdrVideo = hdrSurface,
+                    audioOnly = audioOnly,
+                    onToggleAudioOnly = {
+                        val next = !audioOnly
+                        audioOnly = next
+                        viewModel.showMessage(if (next) "已切换听视频（纯音频）" else "已恢复视频画面")
+                    },
+                    onCacheVideo = state.source?.let { src ->
+                        {
+                            scope.launch {
+                                val res = container.downloads.enqueue(
+                                    bvid = bvid,
+                                    cid = state.selectedCid,
+                                    title = state.detail?.title.orEmpty(),
+                                    upName = state.detail?.upName.orEmpty(),
+                                    coverUrl = state.detail?.cover.orEmpty(),
+                                    source = src,
+                                    kind = erl.bilico.data.model.DownloadKind.VIDEO,
+                                )
+                                res.onSuccess { added ->
+                                    viewModel.showMessage(if (added) "已加入离线缓存，可在「我的 → 离线缓存」查看或导出" else "该视频已在缓存队列中")
+                                }.onFailure { err ->
+                                    viewModel.showMessage(err.message ?: "缓存失败")
+                                }
+                            }
+                        }
+                    },
+                    onCacheAudio = state.source?.takeIf { !it.audioUrl.isNullOrBlank() }?.let { src ->
+                        {
+                            scope.launch {
+                                val res = container.downloads.enqueue(
+                                    bvid = bvid,
+                                    cid = state.selectedCid,
+                                    title = state.detail?.title.orEmpty(),
+                                    upName = state.detail?.upName.orEmpty(),
+                                    coverUrl = state.detail?.cover.orEmpty(),
+                                    source = src,
+                                    kind = erl.bilico.data.model.DownloadKind.AUDIO_ONLY,
+                                )
+                                res.onSuccess { added ->
+                                    viewModel.showMessage(if (added) "已加入音频缓存，可在「我的 → 离线缓存」导出 M4A" else "该音频已在缓存队列中")
+                                }.onFailure { err ->
+                                    viewModel.showMessage(err.message ?: "缓存失败")
+                                }
+                            }
+                        }
+                    },
                     speed = speed,
                     speedLocked = speedLocked,
                     longPressSpeed = longPressSpeed,

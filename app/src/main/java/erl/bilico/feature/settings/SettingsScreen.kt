@@ -72,6 +72,8 @@ fun SettingsScreen(
     val predictiveBackFollow by container.settings.predictiveBackFollow.collectAsStateWithLifecycle()
     val quality by container.settings.defaultQuality.collectAsStateWithLifecycle()
     val cdnOption by container.settings.cdnOption.collectAsStateWithLifecycle()
+    val httpDnsEnabled by container.settings.httpDnsEnabled.collectAsStateWithLifecycle()
+    val decoderMode by container.settings.decoderMode.collectAsStateWithLifecycle()
     val feedSource by container.settings.feedSource.collectAsStateWithLifecycle()
     val inAppBackgroundPlay by container.settings.inAppBackgroundPlay.collectAsStateWithLifecycle()
     val backgroundPlay by container.settings.backgroundPlay.collectAsStateWithLifecycle()
@@ -181,6 +183,15 @@ fun SettingsScreen(
                     summary = CdnOption.fromId(cdnOption).label,
                     cardListPosition = CardListPosition.Middle,
                     onClick = { pickCdn = true },
+                )
+                OverlayDropdownPreference(
+                    items = DECODER_MODE_OPTIONS,
+                    selectedIndex = decoderMode.coerceIn(0, DECODER_MODE_OPTIONS.lastIndex),
+                    title = "视频解码策略",
+                    summary = "切换后将在下次起播生效，解码失败时自动回退",
+                    modifier = Modifier.testTag("settings_decoder_mode"),
+                    cardListPosition = CardListPosition.Middle,
+                    onSelectedIndexChange = container.settings::setDecoderMode,
                 )
                 SwitchPreference(
                     checked = inAppBackgroundPlay,
@@ -354,7 +365,7 @@ fun SettingsScreen(
             }
         }
 
-        item(key = "storage-title") { SectionTitle("存储") }
+        item(key = "storage-title") { SectionTitle("网络与存储") }
 
         item(key = "storage") {
             Card(
@@ -363,11 +374,20 @@ fun SettingsScreen(
                 insideMargin = PaddingValues(0.dp),
                 weight = CardDefaults.GroupWeight,
             ) {
+                SwitchPreference(
+                    checked = httpDnsEnabled,
+                    onCheckedChange = container.settings::setHttpDnsEnabled,
+                    title = "HTTPDNS 加速",
+                    summary = "对接口、图床与视频 CDN 启用分层 HTTPDNS / DoH 解析并自动回退",
+                    modifier = Modifier.testTag("settings_http_dns"),
+                    cardListPosition = CardListPosition.Head,
+                )
+                PreferenceDivider()
                 ArrowPreference(
                     title = "清除图片缓存",
                     modifier = Modifier.testTag("settings_cache"),
                     summary = if (cacheCleared > 0) "已清除" else "只清本地图片，不影响账号",
-                    cardListPosition = CardListPosition.None,
+                    cardListPosition = CardListPosition.Tail,
                     onClick = {
                         scope.launch {
                             val loader = SingletonImageLoader.get(context)
@@ -580,3 +600,4 @@ private val FEED_SOURCE_OPTIONS = listOf("App 端推荐", "网页端推荐")
 private val AUTO_ROTATE_OPTIONS = listOf("关闭", "迟钝 (防误触, ±15°)", "标准 (±25°)", "灵敏 (±35°)")
 private val LONG_PRESS_SPEED_OPTIONS = listOf(150, 200, 250, 300, 400)
 private val SPONSOR_SKIP_MODES = listOf("自动跳过", "手动提示", "仅标记片段")
+private val DECODER_MODE_OPTIONS = listOf("自动（默认 + 失败回退）", "硬解优先", "软解优先")

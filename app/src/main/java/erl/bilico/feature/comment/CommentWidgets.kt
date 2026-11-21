@@ -1,5 +1,6 @@
 package erl.bilico.feature.comment
 
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
@@ -53,7 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import erl.bilico.data.model.Comment
 import erl.bilico.data.model.DynamicImage
+import erl.bilico.data.repository.CommentVisibilityStatus
 import erl.bilico.data.util.Formatters
+import erl.bilico.di.LocalAppContainer
 import erl.bilico.ui.components.CouiPopupMenu
 import erl.bilico.ui.components.CoverImage
 import erl.bilico.ui.components.LoadingImage
@@ -68,6 +73,7 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
 import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.launch
 
 /** 评论正文默认折叠到这个行数，超出才给一行「展开」。 */
 private const val FOLDED_COMMENT_LINES = 8
@@ -133,7 +139,86 @@ internal fun BiliCommentItem(
         parseCommentColor(comment.vipColorHex) ?: defaultNameColor
     }
     val metaColor = if (isDark) Color(0xFF848994) else Color(0xFF9499A0)
-    val canManageOwn = currentMid > 0L && comment.mid == currentMid && comment.id > 0L && onDelete != null
+    val isOwnComment = currentMid > 0L && comment.mid == currentMid && comment.id > 0L
+    val canManageOwn = isOwnComment && onDelete != null
+    val container = LocalAppContainer.current
+    val commentTarget = LocalCommentTarget.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var translatedText by remember(comment.id) { mutableStateOf<String?>(null) }
+    var translating by remember(comment.id) { mutableStateOf(false) }
+    var visibilityStatus by remember(comment.id) { mutableStateOf<CommentVisibilityStatus?>(null) }
+    var checkingVisibility by remember(comment.id) { mutableStateOf(false) }
+
+    val onToggleTranslate: (() -> Unit)? = remember(
+        comment.id,
+        comment.content,
+        container,
+        commentTarget,
+        translatedText,
+        translating,
+    ) {
+        val target = commentTarget
+        if (container != null && target != null && target.first > 0L && comment.id > 0L && comment.content.isNotBlank()) {
+            {
+                if (translatedText != null) {
+                    translatedText = null
+                } else if (!translating) {
+                    translating = true
+                    scope.launch {
+                        container.comments.translateComment(
+                            oid = target.first,
+                            rpid = comment.id,
+                            type = target.second,
+                        ).onSuccess { text ->
+                            translatedText = text
+                        }.onFailure { err ->
+                            Toast.makeText(context, err.message ?: "暂无可用译文", Toast.LENGTH_SHORT).show()
+                        }
+                        translating = false
+                    }
+                }
+            }
+        } else {
+            null
+        }
+    }
+
+    val onCheckVisibility: (() -> Unit)? = remember(
+        comment.id,
+        comment.rootId,
+        isOwnComment,
+        container,
+        commentTarget,
+        checkingVisibility,
+    ) {
+        val target = commentTarget
+        if (isOwnComment && container != null && target != null && target.first > 0L) {
+            {
+                if (!checkingVisibility) {
+                    checkingVisibility = true
+                    scope.launch {
+                        container.comments.checkCommentVisibility(
+                            oid = target.first,
+                            rpid = comment.id,
+                            rootId = comment.rootId,
+                            type = target.second,
+                        ).onSuccess { status ->
+                            visibilityStatus = status
+                            Toast.makeText(context, status.label, Toast.LENGTH_SHORT).show()
+                        }.onFailure { err ->
+                            visibilityStatus = CommentVisibilityStatus.UNKNOWN
+                            Toast.makeText(context, err.message ?: "可见性检测失败", Toast.LENGTH_SHORT).show()
+                        }
+                        checkingVisibility = false
+                    }
+                }
+            }
+        } else {
+            null
+        }
+    }
+
     val replyCount = maxOf(comment.replyCount, comment.replies.size)
     val replyCenter = if (flat && !isSubReply && onOpenReplies != null && replyCount > 0) {
         remember(comment.id) { mutableFloatStateOf(0f) }
@@ -145,9 +230,14 @@ internal fun BiliCommentItem(
     var confirmDelete by remember(comment.id) { mutableStateOf(false) }
     val menuItems = rememberCommentMenuItems(
         comment = comment,
-        enabled = flat || canManageOwn,
+        enabled = flat || canManageOwn || commentTarget != null,
         canDelete = canManageOwn,
         onRequestDelete = { confirmDelete = true },
+        hasTranslation = translatedText != null,
+        translating = translating,
+        onToggleTranslate = onToggleTranslate,
+        checkingVisibility = checkingVisibility,
+        onCheckVisibility = onCheckVisibility,
     )
 
     Box(
@@ -297,6 +387,76 @@ internal fun BiliCommentItem(
                         color = COUITheme.colorScheme.primary,
                     )
                 }
+            }
+
+            if (translating || translatedText != null) {
+                Spacer(Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(SquircleShape(8.dp))
+                        .background(subBoxBg)
+                        .border(0.5.dp, subBoxOutline, SquircleShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (translating) "正在翻译…" else "译文",
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = metaColor,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (translatedText != null) {
+                            Text(
+                                text = "收起",
+                                fontSize = 11.5.sp,
+                                lineHeight = 15.sp,
+                                color = linkBlue,
+                                modifier = Modifier
+                                    .clip(SquircleShape(4.dp))
+                                    .clickable { translatedText = null }
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            )
+                        }
+                    }
+                    translatedText?.let { translated ->
+                        Text(
+                            text = translated,
+                            style = COUITheme.textStyles.body2.copy(
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
+                            ),
+                            color = COUITheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+
+            if (checkingVisibility || visibilityStatus != null) {
+                Spacer(Modifier.height(6.dp))
+                val statusColor = when (visibilityStatus) {
+                    CommentVisibilityStatus.VISIBLE -> if (isDark) Color(0xFF4ADE80) else Color(0xFF15803D)
+                    CommentVisibilityStatus.SHADOWBANNED -> if (isDark) Color(0xFFFBBF24) else Color(0xFFB45309)
+                    CommentVisibilityStatus.DELETED -> if (isDark) Color(0xFFF87171) else Color(0xFFB91C1C)
+                    else -> metaColor
+                }
+                Text(
+                    text = if (checkingVisibility) "正在检测评论可见性…" else "反诈自检：${visibilityStatus?.label.orEmpty()}",
+                    modifier = Modifier
+                        .clip(SquircleShape(6.dp))
+                        .background(statusColor.copy(alpha = 0.12f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    fontSize = 11.5.sp,
+                    lineHeight = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = statusColor,
+                )
             }
 
             if (comment.pictures.isNotEmpty()) {

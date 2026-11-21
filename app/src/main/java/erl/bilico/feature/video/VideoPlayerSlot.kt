@@ -1,26 +1,43 @@
 package erl.bilico.feature.video
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.exoplayer.ExoPlayer
+import coil3.compose.AsyncImage
 import erl.bilico.data.model.VideoEpisode
+import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.NavState
 import erl.bilico.ui.layerBackdropIf
+import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
+import io.github.suqi8.coui.kmp.squircle.SquircleShape
 
 /**
  * 视频舞台上的播放器与它自带的一整套浮层。
@@ -45,6 +62,10 @@ internal fun BoxScope.VideoPlayerSlot(
     playerError: String?,
     message: String?,
     hdrVideo: Boolean,
+    audioOnly: Boolean = false,
+    onToggleAudioOnly: (() -> Unit)? = null,
+    onCacheVideo: (() -> Unit)? = null,
+    onCacheAudio: (() -> Unit)? = null,
     speed: Float,
     speedLocked: Boolean,
     longPressSpeed: LongPressSpeedController?,
@@ -109,6 +130,17 @@ internal fun BoxScope.VideoPlayerSlot(
         qualityLabel = state.qualityLabel(),
         source = state.source,
         hdrVideo = hdrVideo,
+        audioOnly = audioOnly,
+        onToggleAudioOnly = onToggleAudioOnly,
+        onCacheVideo = onCacheVideo,
+        onCacheAudio = onCacheAudio,
+        audioOnlyOverlay = {
+            VideoAudioOnlyOverlay(
+                coverUrl = state.detail?.cover.orEmpty(),
+                title = state.detail?.title.orEmpty(),
+                upName = state.detail?.upName.orEmpty(),
+            )
+        },
         speed = speed,
         fullscreen = fullscreen,
         portraitFullscreen = portraitFullscreen,
@@ -242,6 +274,56 @@ internal fun BoxScope.VideoPlayerSlot(
                 reportVideoDialog = reportVideoDialog,
                 inlineInStage = true,
             )
+        }
+    }
+}
+
+/** 听视频（纯音频）模式封面展示层，不渲染视频画面以节省解码功耗与流量。 */
+@Composable
+private fun BoxScope.VideoAudioOnlyOverlay(
+    coverUrl: String,
+    title: String,
+    upName: String,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF141418)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (coverUrl.isNotBlank()) {
+                AsyncImage(
+                    model = Formatters.sizedImageUrl(coverUrl, 480, 300),
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(width = 160.dp, height = 100.dp)
+                        .clip(SquircleShape(14.dp)),
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Text(
+                text = "听视频模式 · 仅加载音频轨",
+                color = Color.White.copy(alpha = 0.88f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            if (upName.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = upName,
+                    color = Color.White.copy(alpha = 0.56f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

@@ -3,6 +3,8 @@ package erl.bilico.data.network
 import android.content.Context
 import erl.bilico.data.session.CookieStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
@@ -51,11 +53,14 @@ private class BiliHeaderInterceptor : okhttp3.Interceptor {
 /** 一个进程一套网络栈：Cookie 会话、WBI 密钥与所有仓库共享同一条 OkHttp。 */
 class BiliClient(
     context: Context,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
+    httpDnsEnabled: () -> Boolean = { true },
 ) {
     val cookieStore = CookieStore(context, scope)
+    val dns = BiliDns(context, httpDnsEnabled)
 
     val okHttp: OkHttpClient = OkHttpClient.Builder()
+        .dns(dns)
         .cookieJar(cookieStore)
         .addInterceptor(BiliHeaderInterceptor())
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -67,12 +72,29 @@ class BiliClient(
         .retryOnConnectionFailure(true)
         .build()
 
+    /** 无 Cookie 客户端：用于发评反诈可见性自检（以游客视角校验评论是否可见）。 */
+    val anonymousOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .dns(dns)
+        .addInterceptor(BiliHeaderInterceptor())
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    /** gRPC 专用无 Cookie 客户端，请求头由 [BiliGrpcClient] 独立构建。 */
+    val grpcOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .dns(dns)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     /**
      * 图片加载专用客户端：提升单主机并发与 HTTP/2 连接池复用，避免信息流封面与头像排队空白。
      * 刻意不挂 [cookieStore]：图床不需要 Cookie，也不把登录态发给第三方图片域名；
      * 与主客户端分开连接池后，图片不会挤占接口请求的并发额度。
      */
     private val imageOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .dns(dns)
         .addInterceptor(BiliHeaderInterceptor())
         .dispatcher(
             Dispatcher().apply {
@@ -87,6 +109,8 @@ class BiliClient(
 
     val api: BiliApi = retrofit("https://api.bilibili.com/", okHttp).create(BiliApi::class.java)
 
+    val anonymousApi: BiliApi = retrofit("https://api.bilibili.com/", anonymousOkHttp).create(BiliApi::class.java)
+
     val passportApi: PassportApi = retrofit(
         baseUrl = "https://passport.bilibili.com/",
         client = createQrAuthorizationClient(okHttp),
@@ -94,6 +118,24 @@ class BiliClient(
 
     val wbi = WbiKeyManager(context, api = { api })
     val buvid = BuvidManager(cookies = cookieStore, api = { api })
+
+    /** 启动期异步预热 HTTPDNS 与图床 TCP+TLS 连接，避免首屏首批封面排队等握手。 */
+    fun warmupConnections() {
+        dns.prefetch()
+        scope.launchWarmup()
+    }
+
+    private fun CoroutineScope.launchWarmup() {
+        IMAGE_WARMUP_HOSTS.forEach { host ->
+            launch(Dispatchers.IO) {
+                val req = Request.Builder()
+                    .url("https://$host")
+                    .head()
+                    .build()
+                runCatching { imageOkHttp.newCall(req).execute().close() }
+            }
+        }
+    }
 
     /** 给 ExoPlayer 使用同一套请求头，避免 CDN 403。 */
     fun mediaClient(): OkHttpClient = mediaOkHttp
@@ -125,5 +167,6 @@ class BiliClient(
 
     companion object {
         val json: Json = biliJson
+        private val IMAGE_WARMUP_HOSTS = listOf("i0.hdslb.com", "i1.hdslb.com", "i2.hdslb.com")
     }
 }

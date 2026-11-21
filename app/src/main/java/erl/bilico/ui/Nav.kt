@@ -158,6 +158,8 @@ sealed interface Route {
     data class FavoriteFolder(val mediaId: Long, val title: String) : Route
     data object WatchLater : Route
     data object Following : Route
+    data object Downloads : Route
+    data object PublishedRecords : Route
     data object Settings : Route
     data object BlockManager : Route
     data object About : Route

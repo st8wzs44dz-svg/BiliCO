@@ -116,6 +116,8 @@ internal fun rememberPlayerMoreMenuItems(
     onSelectLine: (() -> Unit)? = null,
     audioOnly: Boolean = false,
     onToggleAudioOnly: (() -> Unit)? = null,
+    onCacheVideo: (() -> Unit)? = null,
+    onCacheAudio: (() -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
     onSubmitSponsor: (() -> Unit)? = null,
     onShowStats: (() -> Unit)? = null,
@@ -126,6 +128,8 @@ internal fun rememberPlayerMoreMenuItems(
     val castState by rememberUpdatedState(onCast)
     val selectLineState by rememberUpdatedState(onSelectLine)
     val toggleAudioState by rememberUpdatedState(onToggleAudioOnly)
+    val cacheVideoState by rememberUpdatedState(onCacheVideo)
+    val cacheAudioState by rememberUpdatedState(onCacheAudio)
     val reportVideoState by rememberUpdatedState(onReportVideo)
     val submitSponsorState by rememberUpdatedState(onSubmitSponsor)
     val statsState by rememberUpdatedState(onShowStats)
@@ -135,14 +139,16 @@ internal fun rememberPlayerMoreMenuItems(
     val hasCast = onCast != null
     val hasSelectLine = onSelectLine != null
     val hasToggleAudio = onToggleAudioOnly != null
+    val hasCacheVideo = onCacheVideo != null
+    val hasCacheAudio = onCacheAudio != null
     val hasReportVideo = onReportVideo != null
     val hasSubmitSponsor = onSubmitSponsor != null
     val hasStats = onShowStats != null
     val hasTopBarSettings = onOpenTopBarSettings != null
     return remember(
         playbackEndMode, hasPlaybackEnd, hasShare, hasCast,
-        hasSelectLine, audioOnly, hasToggleAudio, hasReportVideo, hasSubmitSponsor, hasStats,
-        hasTopBarSettings,
+        hasSelectLine, audioOnly, hasToggleAudio, hasCacheVideo, hasCacheAudio,
+        hasReportVideo, hasSubmitSponsor, hasStats, hasTopBarSettings,
     ) {
         buildList {
             if (hasSelectLine) {
@@ -151,12 +157,19 @@ internal fun rememberPlayerMoreMenuItems(
             if (hasToggleAudio) {
                 add(
                     CouiMenuItem(
-                        label = if (audioOnly) "退出黑听（恢复画面）" else "黑听（仅听音频）",
+                        label = if (audioOnly) "退出听视频（恢复画面）" else "听视频（仅音频）",
                         selected = audioOnly,
                         onClick = { toggleAudioState?.invoke() },
                         group = 0,
                     ),
                 )
+            }
+            if (hasCacheVideo || hasCacheAudio) {
+                val children = buildList {
+                    if (hasCacheVideo) add(CouiMenuItem(label = "缓存视频（MP4）", onClick = { cacheVideoState?.invoke() }))
+                    if (hasCacheAudio) add(CouiMenuItem(label = "仅缓存音频（M4A）", onClick = { cacheAudioState?.invoke() }))
+                }
+                add(CouiMenuItem(label = "离线缓存", onClick = {}, children = children, group = 0))
             }
             if (hasCast) add(CouiMenuItem(label = "投屏", onClick = { castState?.invoke() }, group = 0))
             if (hasPlaybackEnd) {
@@ -184,7 +197,7 @@ internal fun rememberPlayerMoreMenuItems(
     }
 }
 
-/** 顶栏右端的三个点：投屏、切换线路、黑听、自动联播、分享、空降提交、举报、顶栏设置与视频信息统计。 */
+/** 顶栏右端的三个点：投屏、切换线路、听视频、离线缓存、自动联播、分享、空降提交、举报、顶栏设置与视频信息统计。 */
 @Composable
 internal fun PlayerMoreMenu(
     onShare: (() -> Unit)?,
@@ -194,6 +207,8 @@ internal fun PlayerMoreMenu(
     onSelectLine: (() -> Unit)? = null,
     audioOnly: Boolean = false,
     onToggleAudioOnly: (() -> Unit)? = null,
+    onCacheVideo: (() -> Unit)? = null,
+    onCacheAudio: (() -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
     onSubmitSponsor: (() -> Unit)? = null,
     onShowStats: (() -> Unit)? = null,
@@ -202,8 +217,8 @@ internal fun PlayerMoreMenu(
     var expanded by remember { mutableStateOf(false) }
     val items = rememberPlayerMoreMenuItems(
         playbackEndMode, onSelectPlaybackEndMode, onShare, onCast,
-        onSelectLine, audioOnly, onToggleAudioOnly, onReportVideo, onSubmitSponsor, onShowStats,
-        onOpenTopBarSettings,
+        onSelectLine, audioOnly, onToggleAudioOnly, onCacheVideo, onCacheAudio,
+        onReportVideo, onSubmitSponsor, onShowStats, onOpenTopBarSettings,
     )
     Box {
         PlayerIconButton(COUIIcons.More, "更多", onClick = { expanded = true })
@@ -503,6 +518,8 @@ internal fun PlayerStagePopupMenus(
     onSelectLine: (() -> Unit)? = null,
     audioOnly: Boolean = false,
     onToggleAudioOnly: (() -> Unit)? = null,
+    onCacheVideo: (() -> Unit)? = null,
+    onCacheAudio: (() -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
     onSubmitSponsor: (() -> Unit)? = null,
     onShowStats: () -> Unit,
@@ -529,6 +546,8 @@ internal fun PlayerStagePopupMenus(
             onSelectLine = onSelectLine?.let { open -> { onHideControls(); open() } },
             audioOnly = audioOnly,
             onToggleAudioOnly = onToggleAudioOnly,
+            onCacheVideo = onCacheVideo?.let { action -> { onHideControls(); action() } },
+            onCacheAudio = onCacheAudio?.let { action -> { onHideControls(); action() } },
             onReportVideo = onReportVideo?.let { open -> { onHideControls(); open() } },
             onSubmitSponsor = onSubmitSponsor?.let { open -> { onHideControls(); open() } },
             onShowStats = onShowStats,

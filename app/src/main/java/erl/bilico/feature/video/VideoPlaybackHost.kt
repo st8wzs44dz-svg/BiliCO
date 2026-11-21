@@ -43,6 +43,7 @@ internal fun VideoPlaybackEffects(
     isTop: Boolean,
     isActiveRoute: Boolean,
     isPlaying: Boolean,
+    audioOnly: Boolean = false,
     state: VideoUiState,
     viewModel: VideoViewModel,
     container: AppContainer,
@@ -130,29 +131,37 @@ internal fun VideoPlaybackEffects(
         }
     }
 
-    LaunchedEffect(player, bvid, state.source, isTop) {
+    LaunchedEffect(player, bvid, state.source, isTop, audioOnly) {
         // 只让栈顶这一页往共享播放器里装片源：压在下面的播放页还留在组合里，
         // 一旦它们也跟着状态变化重新装载，就会把正在播的那条顶掉、从头再来一遍。
         if (!isTop) return@LaunchedEffect
         val source = state.source ?: return@LaunchedEffect
         val currentAttempts = attempts ?: return@LaunchedEffect
-        val mediaId = playbackMediaId(bvid, state.selectedCid, source.videoUrl)
+        val effectiveAudioOnly = audioOnly && !source.audioUrl.isNullOrBlank()
+        val mediaId = playbackMediaId(bvid, state.selectedCid, source.videoUrl, effectiveAudioOnly)
         // 缩进融合球、再从球里回来时这一页会被重建一次，播放器本身没换；
         // 此时再 setMediaSource 一次就会从 0 重新播。片源没变且播放器还装着它，就只登记候选表。
         if (player.playbackState != Player.STATE_IDLE &&
             player.currentMediaItem?.mediaId == mediaId
         ) {
-            currentAttempts.adopt(source, dataSourceFactory, mediaId)
+            currentAttempts.adopt(source, dataSourceFactory, mediaId, effectiveAudioOnly)
             return@LaunchedEffect
         }
-        if (state.resumePositionMs <= 0L && source.lastPlayTimeMs >= 3_000L) {
+        val currentMediaPrefix = "$bvid/${state.selectedCid}/"
+        val switchingAudioMode = player.playbackState != Player.STATE_IDLE &&
+            player.currentMediaItem?.mediaId?.startsWith(currentMediaPrefix) == true
+        if (state.resumePositionMs <= 0L && source.lastPlayTimeMs >= 3_000L && !switchingAudioMode) {
             viewModel.applyServerResumeHint(source.lastPlayCid, source.lastPlayTimeMs)
         }
-        val resumeAt = viewModel.state.value.resumePositionMs
+        val resumeAt = if (switchingAudioMode) {
+            player.currentPosition.coerceAtLeast(0L)
+        } else {
+            viewModel.state.value.resumePositionMs
+        }
         // 换线之前先把上一条的错误清掉：不清的话，换线成功也一直挂着错误卡片。
         onClearError()
-        currentAttempts.start(source, dataSourceFactory, resumeAt, mediaId)
-        if (resumeAt > 0L) viewModel.consumeResumePosition()
+        currentAttempts.start(source, dataSourceFactory, resumeAt, mediaId, effectiveAudioOnly)
+        if (!switchingAudioMode && resumeAt > 0L) viewModel.consumeResumePosition()
     }
 
     // 切号 / 登录态变了：按当前清晰度重新取流，让刚生效的大会员档位回到清晰度菜单里。
@@ -170,9 +179,10 @@ internal fun VideoPlaybackEffects(
         if (isTop) player.setPlaybackSpeed(effectiveSpeed)
     }
 
-    LaunchedEffect(player, isActiveRoute) {
+    // 按需进度轮询：仅在播放中每 500ms 采样一次，暂停时同步最后位置后立刻停轮询以降低空转功耗。
+    LaunchedEffect(player, isActiveRoute, isPlaying) {
         if (!isActiveRoute) return@LaunchedEffect
-        while (true) {
+        fun sampleOnce() {
             val position = player.currentPosition.coerceAtLeast(0L)
             attempts?.rememberPosition(position)
             viewModel.reportHeartbeat(position / 1000, player.isPlaying)
@@ -189,7 +199,12 @@ internal fun VideoPlaybackEffects(
                 clock.durationMs = player.duration.coerceAtLeast(0L)
                 danmakuController.onPosition(position)
             }
+        }
+        sampleOnce()
+        if (!isPlaying) return@LaunchedEffect
+        while (true) {
             delay(500)
+            sampleOnce()
         }
     }
 }

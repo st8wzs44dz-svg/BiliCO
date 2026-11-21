@@ -396,12 +396,33 @@ private class PlaybackPlayerHolder(
     }
 }
 
-fun buildConfiguredExoPlayer(context: Context): ExoPlayer {
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+fun buildConfiguredExoPlayer(
+    context: Context,
+    decoderMode: Int = 0,
+): ExoPlayer {
     val attrs = AudioAttributes.Builder()
         .setUsage(C.USAGE_MEDIA)
         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
         .build()
-    return ExoPlayer.Builder(context)
+    val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+        .setEnableDecoderFallback(true)
+        .apply {
+            if (decoderMode == 1 || decoderMode == 2) {
+                setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                    val codecs = androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
+                        .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                    if (!mimeType.startsWith("video/")) {
+                        codecs
+                    } else if (decoderMode == 2) {
+                        codecs.sortedBy { if (it.softwareOnly) 0 else 1 }
+                    } else {
+                        codecs.sortedBy { if (it.hardwareAccelerated) 0 else 1 }
+                    }
+                }
+            }
+        }
+    return ExoPlayer.Builder(context, renderersFactory)
         .setAudioAttributes(attrs, true)
         .setHandleAudioBecomingNoisy(true)
         .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)

@@ -16,6 +16,7 @@ import erl.bilico.data.model.SubReplyPage
 import erl.bilico.data.model.UploadedPicture
 import erl.bilico.data.network.BiliApi
 import erl.bilico.data.network.BiliClient
+import erl.bilico.data.network.BiliGrpcClient
 import erl.bilico.data.network.BuvidManager
 import erl.bilico.data.network.WbiKeyManager
 import erl.bilico.data.network.WbiUtils
@@ -29,7 +30,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.TreeMap
 
 /**
- * 评论读写链路：HTTP 版主楼 + 楼中楼 + 发表评论/回复 + 点赞评论。
+ * 评论读写链路：HTTP 版主楼 + 楼中楼 + 发表评论/回复 + 点赞评论 + gRPC 翻译 + 游客视角可见性自检。
  * 主楼用 WBI 的 `reply/wbi/main`（热度序），失败时退回旧版 `x/v2/reply`。
  */
 class CommentRepository(
@@ -37,6 +38,9 @@ class CommentRepository(
     private val wbi: WbiKeyManager,
     private val buvid: BuvidManager,
     private val session: SessionRepository,
+    private val anonymousApi: BiliApi? = null,
+    private val grpc: BiliGrpcClient? = null,
+    private val publishedRecords: PublishedRecordRepository? = null,
 ) {
     suspend fun mainComments(
         oid: Long,
@@ -215,7 +219,7 @@ class CommentRepository(
                 error(msg)
             }
             val returned = response.data?.reply
-            if (returned != null && returned.rpid > 0L) {
+            val resultComment = if (returned != null && returned.rpid > 0L) {
                 returned.toComment()
             } else {
                 val account = session.account.value
@@ -239,7 +243,120 @@ class CommentRepository(
                         .filter { (name, targetMid) -> name.isNotBlank() && targetMid > 0L },
                 )
             }
+            runCatching {
+                publishedRecords?.recordComment(
+                    oid = oid,
+                    type = type,
+                    rpid = resultComment.id,
+                    rootId = resultComment.rootId,
+                    content = trimmed,
+                )
+            }
+            resultComment
         }
+    }
+
+    /** 通过轻量 gRPC `Reply/TranslateReply` 翻译单条评论。 */
+    suspend fun translateComment(
+        oid: Long,
+        rpid: Long,
+        type: Int = 1,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val client = grpc ?: error("翻译服务未初始化")
+            buvid.ensure()
+            val text = client.translateReply(type = type, oid = oid, rpid = rpid).getOrThrow()
+            text?.takeIf { it.isNotBlank() } ?: error("暂无可用译文")
+        }
+    }
+
+    /**
+     * 发评反诈 / 可见性自检：使用不携带 Cookie 的游客客户端核对评论是否对他人可见。
+     * 自己能查到但游客查不到时判定为疑似仅自己可见（审核/吞评）。
+     */
+    suspend fun checkCommentVisibility(
+        oid: Long,
+        rpid: Long,
+        rootId: Long = 0L,
+        type: Int = 1,
+    ): Result<CommentVisibilityStatus> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (oid <= 0L || rpid <= 0L) return@runCatching CommentVisibilityStatus.UNKNOWN
+            val guestApi = anonymousApi ?: return@runCatching CommentVisibilityStatus.UNKNOWN
+            val targetRoot = rootId.takeIf { it > 0L } ?: rpid
+            val isSubReply = targetRoot != rpid
+
+            val guestVisible = isCommentVisibleVia(guestApi, oid, type, targetRoot, rpid, isSubReply)
+            if (guestVisible) return@runCatching CommentVisibilityStatus.VISIBLE
+
+            buvid.ensure()
+            val selfVisible = isCommentVisibleVia(api, oid, type, targetRoot, rpid, isSubReply)
+            if (selfVisible) {
+                CommentVisibilityStatus.SHADOWBANNED
+            } else {
+                CommentVisibilityStatus.DELETED
+            }
+        }
+    }
+
+    private suspend fun isCommentVisibleVia(
+        targetApi: BiliApi,
+        oid: Long,
+        type: Int,
+        targetRoot: Long,
+        rpid: Long,
+        isSubReply: Boolean,
+    ): Boolean {
+        if (!isSubReply) {
+            val resp = runCatching {
+                targetApi.subComments(
+                    mapOf(
+                        "oid" to oid.toString(),
+                        "type" to type.toString(),
+                        "root" to targetRoot.toString(),
+                        "pn" to "1",
+                        "ps" to "1",
+                    ),
+                )
+            }.getOrNull() ?: return false
+            return resp.code == 0 && resp.data?.root?.rpid == rpid
+        }
+        // 子回复：优先检查靠前与末页（新回复通常在末页）
+        val first = runCatching {
+            targetApi.subComments(
+                mapOf(
+                    "oid" to oid.toString(),
+                    "type" to type.toString(),
+                    "root" to targetRoot.toString(),
+                    "pn" to "1",
+                    "ps" to "20",
+                ),
+            )
+        }.getOrNull() ?: return false
+        if (first.code != 0) return false
+        if (first.data?.replies.orEmpty().any { it.rpid == rpid }) return true
+        val count = first.data?.page?.count ?: 0
+        val lastPage = ((count + 19) / 20).coerceAtLeast(1)
+        if (lastPage <= 1) return false
+        val pagesToCheck = buildList {
+            add(lastPage)
+            if (lastPage - 1 >= 2) add(lastPage - 1)
+        }
+        for (page in pagesToCheck) {
+            val resp = runCatching {
+                targetApi.subComments(
+                    mapOf(
+                        "oid" to oid.toString(),
+                        "type" to type.toString(),
+                        "root" to targetRoot.toString(),
+                        "pn" to page.toString(),
+                        "ps" to "20",
+                    ),
+                )
+            }.getOrNull() ?: continue
+            if (resp.code == 0 && resp.data?.replies.orEmpty().any { it.rpid == rpid }) return true
+        }
+        return false
     }
 
     /** 表情面板：未登录时服务端不给包，直接返回空表，界面只显示「登录后可用表情」。 */

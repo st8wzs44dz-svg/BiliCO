@@ -3,11 +3,13 @@ package erl.bilico.di
 import android.content.Context
 import androidx.compose.runtime.staticCompositionLocalOf
 import erl.bilico.data.network.BiliClient
+import erl.bilico.data.network.BiliGrpcClient
 import erl.bilico.data.network.TokenRefreshHelper
 import erl.bilico.data.repository.ArticleRepository
 import erl.bilico.data.repository.BlockRepository
 import erl.bilico.data.repository.CommentRepository
 import erl.bilico.data.repository.DanmakuRepository
+import erl.bilico.data.repository.DownloadRepository
 import erl.bilico.data.repository.DynamicRepository
 import erl.bilico.data.repository.FavoriteRepository
 import erl.bilico.data.repository.FeedRepository
@@ -18,6 +20,7 @@ import erl.bilico.data.repository.InteractionRepository
 import erl.bilico.data.repository.LiveRepository
 import erl.bilico.data.repository.MessageRepository
 import erl.bilico.data.repository.PgcRepository
+import erl.bilico.data.repository.PublishedRecordRepository
 import erl.bilico.data.repository.RankingRepository
 import erl.bilico.data.repository.RelationRepository
 import erl.bilico.data.repository.ReportRepository
@@ -43,7 +46,13 @@ class AppContainer(context: Context) {
     val appContext = context.applicationContext
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    val client = BiliClient(appContext, scope)
+    val settings = SettingsRepository(appContext, scope)
+
+    val client = BiliClient(
+        context = appContext,
+        scope = scope,
+        httpDnsEnabled = { settings.httpDnsEnabled.value },
+    )
 
     val session = SessionRepository(
         context = appContext,
@@ -54,7 +63,16 @@ class AppContainer(context: Context) {
         scope = scope,
     )
 
-    val settings = SettingsRepository(appContext, scope)
+    val grpc = BiliGrpcClient(
+        okHttp = client.grpcOkHttp,
+        buvidProvider = { client.cookieStore.get("buvid3").orEmpty() },
+        accessTokenProvider = { client.cookieStore.get("access_token").orEmpty() },
+        midProvider = { session.mid().takeIf { it > 0L } ?: (session.account.value?.mid ?: 0L) },
+    )
+
+    val publishedRecords = PublishedRecordRepository(appContext, scope)
+
+    val downloads = DownloadRepository(appContext, client, scope)
 
     val tokenRefresh = TokenRefreshHelper(client.passportApi, session)
 
@@ -62,7 +80,15 @@ class AppContainer(context: Context) {
 
     val video = VideoRepository(client.api, client.wbi, client.buvid, session, client.okHttp)
 
-    val comments = CommentRepository(client.api, client.wbi, client.buvid, session)
+    val comments = CommentRepository(
+        api = client.api,
+        wbi = client.wbi,
+        buvid = client.buvid,
+        session = session,
+        anonymousApi = client.anonymousApi,
+        grpc = grpc,
+        publishedRecords = publishedRecords,
+    )
 
     val heartbeat = HeartbeatReporter(client.api, session)
 
@@ -86,7 +112,7 @@ class AppContainer(context: Context) {
 
     val relations = RelationRepository(client.api, client.buvid, session)
 
-    val danmaku = DanmakuRepository(client.api, client.buvid, session)
+    val danmaku = DanmakuRepository(client.api, client.buvid, session, publishedRecords)
 
     val pgc = PgcRepository(client.api, client.wbi, client.buvid, session)
 

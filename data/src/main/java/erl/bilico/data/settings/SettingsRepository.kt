@@ -120,6 +120,14 @@ class SettingsRepository(
     private val _fullscreenGestureHint = MutableStateFlow(true)
     val fullscreenGestureHint: StateFlow<Boolean> = _fullscreenGestureHint.asStateFlow()
 
+    /** 是否启用分层 HTTPDNS / DoH 解析，提升弱网或 DNS 劫持环境下的起播与加载速度。 */
+    private val _httpDnsEnabled = MutableStateFlow(true)
+    val httpDnsEnabled: StateFlow<Boolean> = _httpDnsEnabled.asStateFlow()
+
+    /** 视频解码策略：0 = 自动（系统默认+异常回退），1 = 硬解优先，2 = 软解优先。 */
+    private val _decoderMode = MutableStateFlow(0)
+    val decoderMode: StateFlow<Int> = _decoderMode.asStateFlow()
+
     /** 播放器顶栏的显示配置，全屏与竖屏各一份。 */
     val playerTopBar = PlayerTopBarPreferences(context, scope)
 
@@ -182,6 +190,7 @@ class SettingsRepository(
                 strokeWidth = (prefs[KEY_DM_STROKE] ?: 16).coerceIn(0, 30),
                 fontWeight = (prefs[KEY_DM_WEIGHT] ?: 6).coerceIn(1, 9),
                 lineHeight = (prefs[KEY_DM_LINE_HEIGHT] ?: 135).coerceIn(100, 200),
+                weightFilterLevel = (prefs[KEY_DM_WEIGHT_FILTER] ?: 0).coerceIn(0, 10),
             )
             syncDanmakuState(dm)
             _advancedPlusOne.value = prefs[KEY_ADVANCED_PLUS_ONE] ?: false
@@ -208,6 +217,8 @@ class SettingsRepository(
             _autoRotateMode.value = prefs[KEY_AUTO_ROTATE_MODE] ?: 1
             _gestureVolumeBrightness.value = prefs[KEY_GESTURE_VOL_BRIGHT] ?: true
             _fullscreenGestureHint.value = prefs[KEY_FS_GESTURE_HINT] ?: true
+            _httpDnsEnabled.value = prefs[KEY_HTTP_DNS_ENABLED] ?: true
+            _decoderMode.value = (prefs[KEY_DECODER_MODE] ?: 0).coerceIn(0, 2)
             playerTopBar.restore()
             feed.restore()
             _sponsorBlockEnabled.value = prefs[KEY_SPONSOR_BLOCK_ENABLED] ?: true
@@ -488,6 +499,23 @@ class SettingsRepository(
         scope.launch { context.biliDataStore.edit { it[KEY_DM_LINE_HEIGHT] = v } }
     }
 
+    fun setDanmakuWeightFilterLevel(value: Int) {
+        val v = value.coerceIn(0, 10)
+        syncDanmakuState(_danmakuSettings.value.copy(weightFilterLevel = v))
+        scope.launch { context.biliDataStore.edit { it[KEY_DM_WEIGHT_FILTER] = v } }
+    }
+
+    fun setHttpDnsEnabled(enabled: Boolean) {
+        _httpDnsEnabled.value = enabled
+        scope.launch { context.biliDataStore.edit { it[KEY_HTTP_DNS_ENABLED] = enabled } }
+    }
+
+    fun setDecoderMode(mode: Int) {
+        val v = mode.coerceIn(0, 2)
+        _decoderMode.value = v
+        scope.launch { context.biliDataStore.edit { it[KEY_DECODER_MODE] = v } }
+    }
+
     fun resetDanmakuSettings() {
         val defaults = DanmakuSettings(enabled = _danmakuSettings.value.enabled)
         syncDanmakuState(defaults)
@@ -507,6 +535,7 @@ class SettingsRepository(
                 it[KEY_DM_STROKE] = defaults.strokeWidth
                 it[KEY_DM_WEIGHT] = defaults.fontWeight
                 it[KEY_DM_LINE_HEIGHT] = defaults.lineHeight
+                it[KEY_DM_WEIGHT_FILTER] = defaults.weightFilterLevel
             }
         }
     }
@@ -580,6 +609,7 @@ class SettingsRepository(
         val KEY_DM_STROKE = intPreferencesKey("danmaku_stroke_width")
         val KEY_DM_WEIGHT = intPreferencesKey("danmaku_font_weight")
         val KEY_DM_LINE_HEIGHT = intPreferencesKey("danmaku_line_height")
+        val KEY_DM_WEIGHT_FILTER = intPreferencesKey("danmaku_weight_filter")
         val KEY_IN_APP_BACKGROUND_PLAY = booleanPreferencesKey("in_app_background_play")
         val KEY_BACKGROUND_PLAY = booleanPreferencesKey("background_play")
         val KEY_AUTO_PIP = booleanPreferencesKey("auto_pip")
@@ -597,6 +627,8 @@ class SettingsRepository(
         const val DEFAULT_LONG_PRESS_SPEED = 200
         val KEY_GESTURE_VOL_BRIGHT = booleanPreferencesKey("gesture_vol_bright")
         val KEY_FS_GESTURE_HINT = booleanPreferencesKey("fullscreen_gesture_hint")
+        val KEY_HTTP_DNS_ENABLED = booleanPreferencesKey("http_dns_enabled")
+        val KEY_DECODER_MODE = intPreferencesKey("video_decoder_mode")
         val KEY_SPONSOR_BLOCK_ENABLED = booleanPreferencesKey("sponsor_block_enabled")
         val KEY_SPONSOR_SKIP_MODE = intPreferencesKey("sponsor_skip_mode")
         val KEY_SPONSOR_CATEGORIES = stringPreferencesKey("sponsor_categories")

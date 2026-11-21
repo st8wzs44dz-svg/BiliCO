@@ -187,6 +187,15 @@ internal fun DanmakuSettingsSheet(
                         checked = settings.massiveMode,
                         onCheckedChange = repository::setDanmakuMassiveMode,
                         title = "海量弹幕模式",
+                        cardListPosition = CardListPosition.Middle,
+                    )
+                    DraftSliderPreference(
+                        persistedValue = settings.weightFilterLevel,
+                        onCommit = repository::setDanmakuWeightFilterLevel,
+                        title = "智能云屏蔽等级",
+                        formatValueText = { if (it <= 0) "关闭" else "≥ $it 级" },
+                        valueRange = 0f..10f,
+                        steps = 9,
                         cardListPosition = CardListPosition.Tail,
                     )
                 }

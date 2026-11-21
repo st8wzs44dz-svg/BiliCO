@@ -52,9 +52,11 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Album
 import io.github.suqi8.coui.kmp.icon.extended.Contacts
+import io.github.suqi8.coui.kmp.icon.extended.Download
 import io.github.suqi8.coui.kmp.icon.extended.Email
 import io.github.suqi8.coui.kmp.icon.extended.Favorites
 import io.github.suqi8.coui.kmp.icon.extended.ListView
+import io.github.suqi8.coui.kmp.icon.extended.Notes
 import io.github.suqi8.coui.kmp.icon.extended.Playlist
 import io.github.suqi8.coui.kmp.icon.extended.Replace
 import io.github.suqi8.coui.kmp.icon.extended.Settings
@@ -159,6 +161,18 @@ fun MeScreen(
                     icon = COUIIcons.Contacts,
                     position = CardListPosition.Middle,
                     onClick = { nav.push(Route.Following) },
+                )
+                EntryRow(
+                    title = "离线缓存",
+                    icon = COUIIcons.Download,
+                    position = CardListPosition.Middle,
+                    onClick = { nav.push(Route.Downloads) },
+                )
+                EntryRow(
+                    title = "发言记录",
+                    icon = COUIIcons.Notes,
+                    position = CardListPosition.Middle,
+                    onClick = { nav.push(Route.PublishedRecords) },
                 )
                 EntryRow(
                     title = "设置",

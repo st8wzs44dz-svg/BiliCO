@@ -39,6 +39,11 @@ internal fun rememberCommentMenuItems(
     enabled: Boolean,
     canDelete: Boolean,
     onRequestDelete: () -> Unit,
+    hasTranslation: Boolean = false,
+    translating: Boolean = false,
+    onToggleTranslate: (() -> Unit)? = null,
+    checkingVisibility: Boolean = false,
+    onCheckVisibility: (() -> Unit)? = null,
 ): List<CouiMenuItem> {
     val context = LocalContext.current
     val container = erl.bilico.di.LocalAppContainer.current
@@ -76,7 +81,20 @@ internal fun rememberCommentMenuItems(
         )
     }
 
-    return remember(comment, enabled, canDelete, container, commentTarget, context, clipboard) {
+    return remember(
+        comment,
+        enabled,
+        canDelete,
+        container,
+        commentTarget,
+        context,
+        clipboard,
+        hasTranslation,
+        translating,
+        onToggleTranslate,
+        checkingVisibility,
+        onCheckVisibility,
+    ) {
         if (!enabled) {
             emptyList()
         } else {
@@ -89,6 +107,26 @@ internal fun rememberCommentMenuItems(
                                 clipboard.setText(AnnotatedString(comment.content))
                                 Toast.makeText(context, "已复制评论", Toast.LENGTH_SHORT).show()
                             },
+                        ),
+                    )
+                    if (onToggleTranslate != null) {
+                        add(
+                            CouiMenuItem(
+                                label = when {
+                                    translating -> "翻译中…"
+                                    hasTranslation -> "收起译文"
+                                    else -> "翻译评论"
+                                },
+                                onClick = { if (!translating) onToggleTranslate() },
+                            ),
+                        )
+                    }
+                }
+                if (onCheckVisibility != null) {
+                    add(
+                        CouiMenuItem(
+                            label = if (checkingVisibility) "正在检测可见性…" else "可见性自检（反诈）",
+                            onClick = { if (!checkingVisibility) onCheckVisibility() },
                         ),
                     )
                 }

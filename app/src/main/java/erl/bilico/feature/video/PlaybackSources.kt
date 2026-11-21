@@ -37,17 +37,26 @@ internal fun PlaybackSource.streamAttempts(): List<PlaybackAttempt> {
 }
 
 /** 同一份片源在播放器上的标识：片源没变但页面被重建时，靠它跳过重复装载。 */
-internal fun playbackMediaId(bvid: String, cid: Long, videoUrl: String): String =
-    "$bvid/$cid/${videoUrl.hashCode()}"
+internal fun playbackMediaId(
+    bvid: String,
+    cid: Long,
+    videoUrl: String,
+    audioOnly: Boolean = false,
+): String = "$bvid/$cid/${videoUrl.hashCode()}/${if (audioOnly) "a" else "v"}"
 
 internal fun mediaSourceFor(
     factory: OkHttpDataSource.Factory,
     attempt: PlaybackAttempt,
     mediaId: String,
+    audioOnly: Boolean = false,
 ): MediaSource {
+    val audioUrl = attempt.audioUrl
+    if (audioOnly && !audioUrl.isNullOrBlank()) {
+        return ProgressiveMediaSource.Factory(factory)
+            .createMediaSource(MediaItem.Builder().setUri(audioUrl).setMediaId(mediaId).build())
+    }
     val video = ProgressiveMediaSource.Factory(factory)
         .createMediaSource(MediaItem.Builder().setUri(attempt.videoUrl).setMediaId(mediaId).build())
-    val audioUrl = attempt.audioUrl
     if (audioUrl.isNullOrBlank()) return video
     return MergingMediaSource(
         video,
@@ -61,8 +70,9 @@ internal fun ExoPlayer.loadAttempt(
     speed: Float,
     seekMs: Long,
     mediaId: String,
+    audioOnly: Boolean = false,
 ) {
-    setMediaSource(mediaSourceFor(factory, attempt, mediaId))
+    setMediaSource(mediaSourceFor(factory, attempt, mediaId, audioOnly))
     setPlaybackSpeed(speed)
     prepare()
     if (seekMs > 0L) seekTo(seekMs)
@@ -117,6 +127,7 @@ internal class PlaybackAttempts(
     private var factory: OkHttpDataSource.Factory? = null
     private var index = 0
     private var mediaId: String = ""
+    private var audioOnly: Boolean = false
 
     val count: Int get() = attempts.size
 
@@ -125,16 +136,18 @@ internal class PlaybackAttempts(
         factory: OkHttpDataSource.Factory,
         seekMs: Long,
         mediaId: String,
+        audioOnly: Boolean = false,
     ) {
         this.factory = factory
         this.mediaId = mediaId
+        this.audioOnly = audioOnly
         attempts = source.streamAttempts()
         index = 0
         val first = attempts.firstOrNull() ?: return
         // 没有显式续播点就接着本次运行里播到的位置放：播放页被重建、播放器被换掉那几种情况
         // 都会走到这里，不兜这一层就又从 0 开始演一遍已经看过的内容。
         val from = if (seekMs > 0L) seekMs else PlaybackPositions.last(mediaId)
-        player.loadAttempt(factory, first, speed(), from, mediaId)
+        player.loadAttempt(factory, first, speed(), from, mediaId, audioOnly)
     }
 
     /** 把当前播放位置记下来，供 [start] 在重建后接上。 */
@@ -146,12 +159,15 @@ internal class PlaybackAttempts(
      * 播放器上已经装着同一份片源：只把候选表登记回来供换线用，不重新装载。
      * 缩进融合球再复原会把播放页重建一次，照着 [start] 再装一遍会从 0 重新播。
      */
-    fun adopt(source: PlaybackSource, factory: OkHttpDataSource.Factory, mediaId: String) {
+    fun adopt(source: PlaybackSource, factory: OkHttpDataSource.Factory, mediaId: String, audioOnly: Boolean = false) {
         this.factory = factory
         this.mediaId = mediaId
+        this.audioOnly = audioOnly
         attempts = source.streamAttempts()
         val currentUri = player.currentMediaItem?.localConfiguration?.uri?.toString()
-        index = attempts.indexOfFirst { it.videoUrl == currentUri }.coerceAtLeast(0)
+        index = attempts.indexOfFirst {
+            if (audioOnly) it.audioUrl == currentUri else it.videoUrl == currentUri
+        }.coerceAtLeast(0)
     }
 
     /** 还有下一条可用线路就切过去，返回是否切换成功。 */
@@ -160,7 +176,7 @@ internal class PlaybackAttempts(
         val next = index + 1
         if (next >= attempts.size) return false
         index = next
-        player.loadAttempt(factory, attempts[next], speed(), player.currentPosition, mediaId)
+        player.loadAttempt(factory, attempts[next], speed(), player.currentPosition, mediaId, audioOnly)
         return true
     }
 }

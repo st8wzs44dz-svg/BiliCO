@@ -112,7 +112,9 @@ fun PgcScreen(
 
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    val player = rememberPlaybackPlayer("pgc-$seasonId") { buildConfiguredExoPlayer(context) }
+    val player = rememberPlaybackPlayer("pgc-$seasonId") {
+        buildConfiguredExoPlayer(context, container.settings.decoderMode.value)
+    }
     // 页面被弹出（最小化不算）时释放播放器：一台准备好的播放器会占住几十 MB 的加载缓冲。
     val playbackEntry = LocalNavEntry.current
     DisposableEffect(playbackEntry, seasonId) {

@@ -16,6 +16,7 @@ class DanmakuRepository(
     private val api: BiliApi,
     private val buvid: BuvidManager,
     private val session: SessionRepository,
+    private val publishedRecords: PublishedRecordRepository? = null,
 ) {
     private val cache = object : LinkedHashMap<Long, List<DanmakuItem>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<DanmakuItem>>) =
@@ -27,13 +28,15 @@ class DanmakuRepository(
         val key = cid * 1000L + index
         synchronized(cache) { cache[key] }?.let { return@withContext it }
 
-        val items = runCatching {
+        val rawBytes = runCatching {
             buvid.ensure()
             val body = api.danmakuSegment(oid = cid, segmentIndex = index)
-            val bytes = body.use { it.bytes() }
-            DanmakuProto.parse(bytes)
+            body.use { it.bytes() }
         }.getOrNull() ?: return@withContext emptyList()
 
+        val items = withContext(Dispatchers.Default) {
+            runCatching { DanmakuProto.parse(rawBytes) }.getOrDefault(emptyList())
+        }
         synchronized(cache) { cache[key] = items }
         items
     }
@@ -44,6 +47,7 @@ class DanmakuRepository(
         cid: Long,
         message: String,
         progressMs: Long,
+        targetTitle: String = "",
     ): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {
             require(aid > 0L && cid > 0L) { "还没有加载到视频信息" }
@@ -71,9 +75,20 @@ class DanmakuRepository(
             )
             if (response.code != 0) error(sendErrorText(response.code, response.message))
             dropSegment(cid, progressMs)
-            response.data?.dmid?.takeIf { it > 0L }
+            val dmid = response.data?.dmid?.takeIf { it > 0L }
                 ?: response.data?.dmidStr?.toLongOrNull()?.takeIf { it > 0L }
                 ?: 0L
+            runCatching {
+                publishedRecords?.recordDanmaku(
+                    aid = aid,
+                    cid = cid,
+                    dmid = dmid,
+                    progressMs = progressMs,
+                    content = text,
+                    targetTitle = targetTitle,
+                )
+            }
+            dmid
         }
     }
 

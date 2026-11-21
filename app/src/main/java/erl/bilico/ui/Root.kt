@@ -78,6 +78,7 @@ import erl.bilico.di.LocalAppContainer
 import erl.bilico.feature.article.ArticleScreen
 import erl.bilico.feature.chat.ChatScreen
 import erl.bilico.feature.comment.EmoteManagerScreen
+import erl.bilico.feature.download.DownloadScreen
 import erl.bilico.feature.dynamic.DynamicDetailScreen
 import erl.bilico.feature.dynamic.DynamicScreen
 import erl.bilico.feature.dynamic.ImageViewerOverlay
@@ -92,6 +93,7 @@ import erl.bilico.feature.live.LocalLiveRepository
 import erl.bilico.feature.login.LoginScreen
 import erl.bilico.feature.login.WebLoginScreen
 import erl.bilico.feature.me.MeScreen
+import erl.bilico.feature.me.PublishedRecordsScreen
 import erl.bilico.feature.message.MessageScreen
 import erl.bilico.feature.pgc.BangumiFollowScreen
 import erl.bilico.feature.pgc.PgcScreen
@@ -653,6 +655,8 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         is Route.FavoriteFolder -> FavoriteFolderScreen(container, nav, route.mediaId, route.title)
         Route.WatchLater -> WatchLaterScreen(container, nav)
         Route.Following -> FollowingScreen(container, nav)
+        Route.Downloads -> DownloadScreen(container, nav)
+        Route.PublishedRecords -> PublishedRecordsScreen(container, nav)
         Route.Settings -> SettingsScreen(container, nav)
         Route.BlockManager -> BlockManagerScreen(container, nav)
         Route.About -> AboutScreen(container, nav)
