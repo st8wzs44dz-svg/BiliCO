@@ -163,19 +163,25 @@ fun PublishedRecordsScreen(
                     show = menuExpanded,
                     onDismiss = { menuExpanded = false },
                     items = listOf(
-                        CouiMenuItem("导出 JSON 文件") {
-                            exportLauncher.launch("bilico_published_records.json")
-                        },
-                        CouiMenuItem("导入 JSON 文件") {
-                            importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                        },
-                        CouiMenuItem("复制全部 JSON", group = 1) {
-                            scope.launch {
-                                val json = container.publishedRecords.exportJson()
-                                clipboard.setText(AnnotatedString(json))
-                                Toast.makeText(context, "已复制 JSON 到剪贴板", Toast.LENGTH_SHORT).show()
-                            }
-                        },
+                        CouiMenuItem(
+                            label = "导出 JSON 文件",
+                            onClick = { exportLauncher.launch("bilico_published_records.json") },
+                        ),
+                        CouiMenuItem(
+                            label = "导入 JSON 文件",
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                        ),
+                        CouiMenuItem(
+                            label = "复制全部 JSON",
+                            onClick = {
+                                scope.launch {
+                                    val json = container.publishedRecords.exportJson()
+                                    clipboard.setText(AnnotatedString(json))
+                                    Toast.makeText(context, "已复制 JSON 到剪贴板", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            group = 1,
+                        ),
                     ),
                 )
             }
