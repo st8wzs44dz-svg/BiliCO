@@ -410,9 +410,14 @@ internal fun BiliCoRoot(
         val topEntry = nav.stack.lastOrNull { !it.exiting }
         val topRoute = topEntry?.route
         val inPipMode = LocalInPipMode.current
-        // 播放页的亮度手势借的是宿主窗口，离开播放页必须还给系统，
-        // 否则回到首页还停在调过的那一档，整个界面一直刺眼。
-        PlayerWindowBrightnessEffect(active = topRoute?.isPlayback() == true && !inPipMode)
+        // 播放页的亮度提亮借用的是宿主窗口，离开播放页、开始侧滑返回预览或进小窗时必须立刻还给系统，
+        // 否则返回过程中或回到首页后整个界面都会受到影响。
+        PlayerWindowBrightnessEffect(
+            active = topEntry != null &&
+                !topEntry.previewing &&
+                topRoute?.isPlayback() == true &&
+                !inPipMode,
+        )
         RootStatusBarSync(
             nav = nav,
             dark = dark,

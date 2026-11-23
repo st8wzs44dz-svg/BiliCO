@@ -24,8 +24,8 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 153
-        versionName = "0.3.7-pre.2"
+        versionCode = 154
+        versionName = "0.3.7-pre.3"
         buildConfigField("String", "UPDATE_REPOSITORY", "\"st8wzs44dz-svg/BiliCO\"")
     }
 

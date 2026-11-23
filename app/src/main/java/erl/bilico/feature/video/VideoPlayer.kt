@@ -313,8 +313,28 @@ internal fun VideoPlayer(
                     view.resizeMode = resizeMode
                     // 舞台用替身帧或黑听纯音频期间把视频画面隐藏，避免帧残留或黑屏闪烁。
                     view.visibility = if (minimized || frozenVideo || audioOnly) View.INVISIBLE else View.VISIBLE
+                    // Android 15+：竖屏看评论时温和约束 HDR 峰值余量避免系统把下方评论区压暗发灰，全屏再释放原生峰值。
+                    if (hdrVideo && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                        (view.videoSurfaceView as? android.view.SurfaceView)?.setDesiredHdrHeadroom(
+                            if (fullscreen) 0f else 1.5f,
+                        )
+                    }
                 },
                 modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        val brightnessController = LocalPlayerBrightnessController.current
+        val videoDimAlpha = if (isTop && !inPipMode && !minimized && !audioOnly) {
+            brightnessController?.videoDimAlpha ?: 0f
+        } else {
+            0f
+        }
+        if (videoDimAlpha > 0.004f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = videoDimAlpha)),
             )
         }
 

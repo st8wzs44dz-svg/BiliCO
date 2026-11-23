@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import erl.bilico.ui.LocalNavEntry
 import erl.bilico.ui.LocalNavState
 import erl.bilico.ui.LocalRouteIsTop
@@ -187,7 +190,46 @@ internal fun VideoFullscreenStage(
     val isTop = LocalRouteIsTop.current
     val nav = LocalNavState.current
     val navEntry = LocalNavEntry.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val currentFullscreen by rememberUpdatedState(fullscreen)
+    val brightnessController = remember { PlayerBrightnessController() }
+    val playerCollapsed by remember(portraitResizable, windowLandscape, minSlotPx, barFadePx) {
+        derivedStateOf { !windowLandscape && portraitResizable && collapseAlpha() >= 0.95f }
+    }
+    val brightnessOwnerActive = isTop &&
+        !inPipMode &&
+        navEntry?.exiting != true &&
+        navEntry?.previewing != true &&
+        !playerCollapsed
+    val currentBrightnessOwnerActive by rememberUpdatedState(brightnessOwnerActive)
+
+    LaunchedEffect(activity, brightnessOwnerActive, brightnessController.windowOverrideBrightness) {
+        if (brightnessOwnerActive) {
+            applyWindowBrightnessOverride(activity?.window, brightnessController.windowOverrideBrightness)
+        } else {
+            clearWindowBrightnessOverride(activity?.window)
+        }
+    }
+    DisposableEffect(activity, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    clearWindowBrightnessOverride(activity?.window)
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    if (currentBrightnessOwnerActive) {
+                        applyWindowBrightnessOverride(activity?.window, brightnessController.windowOverrideBrightness)
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            clearWindowBrightnessOverride(activity?.window)
+        }
+    }
     // 槽位高度只在 measure 阶段写，不订阅任何组合状态，收到底那一刻不一定正好有重组。
     // 所以这里直接盯住它，收到底就把「横栏已出现」上报给根节点，状态栏图标据此切深色。
     LaunchedEffect(navEntry, minSlotPx) {
@@ -356,7 +398,17 @@ internal fun VideoFullscreenStage(
                     .graphicsLayer {}
                     .nestedScroll(collapseScroll)
                     .drawWithContent {
-                        if (!windowLandscape && progress.value < 0.9995f) drawContent()
+                        if (!windowLandscape && progress.value < 0.9995f) {
+                            drawContent()
+                            val compAlpha = if (brightnessOwnerActive) {
+                                brightnessController.detailCompensationAlpha
+                            } else {
+                                0f
+                            }
+                            if (compAlpha > 0.004f) {
+                                drawRect(Color.Black.copy(alpha = compAlpha))
+                            }
+                        }
                     },
                 content = detailContent,
             )
@@ -436,6 +488,7 @@ internal fun VideoFullscreenStage(
                         LocalStageFrozenVideo provides frameHolder.frozen,
                         LocalStageFrameSource provides frameHolder.source,
                         LocalStageReturnHome provides returnHome,
+                        LocalPlayerBrightnessController provides brightnessController,
                     ) {
                         playerContent()
                         StageFrozenFrame(frameHolder)

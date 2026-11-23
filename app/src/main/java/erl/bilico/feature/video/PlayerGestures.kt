@@ -3,7 +3,6 @@ package erl.bilico.feature.video
 import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
-import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -99,6 +98,8 @@ internal fun PlayerGestureLayer(
     val density = LocalDensity.current
     val edgeGuardPx = remember(density) { with(density) { 24.dp.toPx() } }
     val haptic = rememberCouiHaptic()
+    val brightnessController = LocalPlayerBrightnessController.current
+    val currentBrightnessController by rememberUpdatedState(brightnessController)
 
     val currentPosition by rememberUpdatedState(positionMs)
     val currentDuration by rememberUpdatedState(durationMs)
@@ -282,7 +283,8 @@ internal fun PlayerGestureLayer(
                                                 if (!currentVolBrightEnabled) {
                                                     DragMode.NONE
                                                 } else {
-                                                    startBrightness = readWindowBrightness(activity, context)
+                                                    startBrightness = currentBrightnessController?.beginGesture(context)
+                                                        ?: readSystemBrightness(context)
                                                     levelFraction = startBrightness
                                                     lastStep = -1
                                                     DragMode.BRIGHTNESS
@@ -331,13 +333,15 @@ internal fun PlayerGestureLayer(
                                 DragMode.BRIGHTNESS -> {
                                     val next = (startBrightness - (totalDy - baseDy) / (height * 0.75f))
                                         .coerceIn(0.02f, 1f)
-                                    levelFraction = next
-                                    activity?.window?.let { win ->
-                                        val attrs = win.attributes
-                                        attrs.screenBrightness = next
-                                        win.attributes = attrs
+                                    val controller = currentBrightnessController
+                                    if (controller != null) {
+                                        controller.updateTarget(next)
+                                        levelFraction = controller.targetBrightness ?: controller.systemBaseline
+                                    } else {
+                                        levelFraction = next
+                                        applyWindowBrightnessOverride(activity?.window, next)
                                     }
-                                    val step = (next * BrightnessSteps).roundToInt()
+                                    val step = (levelFraction * BrightnessSteps).roundToInt()
                                     if (step != lastStep) {
                                         lastStep = step
                                         if (currentHapticEnabled) haptic(CouiHapticEffect.Short)
@@ -558,14 +562,6 @@ private fun LevelIndicator(
             maxLines = 1,
         )
     }
-}
-
-private fun readWindowBrightness(activity: Activity?, context: Context): Float {
-    val winVal = activity?.window?.attributes?.screenBrightness ?: -1f
-    if (winVal in 0.01f..1f) return winVal
-    return runCatching {
-        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
-    }.getOrDefault(0.5f).coerceIn(0.02f, 1f)
 }
 
 private fun Context.findHostActivity(): Activity? {
