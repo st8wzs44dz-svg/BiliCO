@@ -69,6 +69,7 @@ import erl.bilico.ui.components.FullPageRefreshHoldMillis
 import erl.bilico.ui.components.FullPageRefreshTexts
 import erl.bilico.ui.components.LoadingState
 import erl.bilico.ui.components.navBottomPadding
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.FullPagePullToRefresh
 import io.github.suqi8.coui.kmp.basic.Text
@@ -97,6 +98,7 @@ fun BangumiRankSection(
     primaryTapTick: Int = 0,
     pagerScrolling: () -> Boolean = { false },
 ) {
+    BindScrollToTop(gridState, enabled = active)
     val viewModel: BangumiRankViewModel = viewModel { BangumiRankViewModel(container.pgc) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()

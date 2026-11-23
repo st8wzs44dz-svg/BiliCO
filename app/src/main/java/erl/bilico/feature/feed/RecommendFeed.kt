@@ -67,6 +67,7 @@ import erl.bilico.ui.expandOrigin
 import erl.bilico.ui.pageContainerColor
 import erl.bilico.ui.rememberExpandOrigin
 import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.FullPagePullToRefresh
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.fullPagePullToRefreshColors
@@ -78,9 +79,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-
-/** 列表末尾还剩这么多项时就开始拉下一页（两列，提前约三行）。 */
-private const val FeedPrefetchDistance = 6
 
 /** 只预取视口前方两行，限制后台请求与当前可见图片的竞争。 */
 private const val CoverPrefetchRows = 2
@@ -119,6 +117,7 @@ internal fun RecommendFeed(
     refreshTick: Int,
     primaryTapTick: Int = 0,
 ) {
+    BindScrollToTop(listState, enabled = active)
     val viewModel: FeedViewModel = viewModel { FeedViewModel(container.feed, container.settings) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
@@ -127,10 +126,18 @@ internal fun RecommendFeed(
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val titleHeightPx = with(density) { TitleRowHeight.toPx() }
+    val context = LocalContext.current
 
     val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
-    val coverWidthPx = remember(screenWidthDp, density) {
-        with(density) { ((screenWidthDp.dp - 15.dp) / 2f).roundToPx() }.coerceAtMost(600)
+    val columns by container.settings.feed.columns.collectAsStateWithLifecycle()
+    val gridSpacing = 5.dp
+    val prefetchDistance = maxOf(6, columns * 3)
+    val swapCoverCount = maxOf(8, columns * 4)
+    val coverWidthPx = remember(screenWidthDp, density, columns, gridSpacing) {
+        val totalGap = 10.dp + gridSpacing * (columns - 1)
+        val maxPx = if (columns <= 1) 1080 else 600
+        with(density) { ((screenWidthDp.dp - totalGap) / columns.toFloat()).roundToPx() }
+            .coerceIn(1, maxPx)
     }
     val coverHeightPx = remember(coverWidthPx, coverAspect) {
         (coverWidthPx / coverAspect.ratio).toInt()
@@ -149,13 +156,21 @@ internal fun RecommendFeed(
             listAlpha.snapTo(1f)
             return@LaunchedEffect
         }
+        val loader = SingletonImageLoader.get(context)
+        next.items.take(swapCoverCount).forEach { video ->
+            loader.enqueue(
+                ImageRequest.Builder(context)
+                    .data(Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx))
+                    .size(coverWidthPx, coverHeightPx)
+                    .build(),
+            )
+        }
         listAlpha.animateTo(0f, tween(SwapFadeOutMillis))
         shown = next
         listState.scrollToItem(0)
         listAlpha.animateTo(1f, tween(SwapFadeInMillis))
     }
 
-    val context = LocalContext.current
     val imageWorkActive = active && nav.stack.lastOrNull()?.route == Route.Main
     val batchSettled = shown.serial == state.refreshSerial
     val settledCovers = remember { mutableStateMapOf<String, String>() }
@@ -164,12 +179,12 @@ internal fun RecommendFeed(
             listState.layoutInfo.visibleVideoCards().mapTo(HashSet()) { it.key }
         }
     }
-    LaunchedEffect(imageWorkActive, batchSettled, listState, context, coverWidthPx, coverHeightPx) {
+    LaunchedEffect(imageWorkActive, batchSettled, listState, context, coverWidthPx, coverHeightPx, columns) {
         if (!imageWorkActive || !batchSettled || coverWidthPx <= 0 || coverHeightPx <= 0) return@LaunchedEffect
         val loader = SingletonImageLoader.get(context)
         val permits = Semaphore(CoverPrefetchParallelism)
         val requests = mutableMapOf<String, Job>()
-        val count = CoverPrefetchRows * FeedColumns
+        val count = CoverPrefetchRows * columns
         snapshotFlow {
             val feed = shown
             val visible = listState.layoutInfo.visibleVideoCards()
@@ -252,12 +267,12 @@ internal fun RecommendFeed(
         onRefresh = { viewModel.refresh() },
     )
 
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, prefetchDistance) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .distinctUntilChanged()
             .collect { lastVisible ->
                 val size = viewModel.state.value.items.size
-                if (lastVisible != null && size > 0 && lastVisible >= size - FeedPrefetchDistance) {
+                if (lastVisible != null && size > 0 && lastVisible >= size - prefetchDistance) {
                     viewModel.loadMore()
                 }
             }
@@ -275,7 +290,7 @@ internal fun RecommendFeed(
     ) {
         LazyVerticalGrid(
             state = listState,
-            columns = GridCells.Fixed(FeedColumns),
+            columns = GridCells.Fixed(columns),
             modifier = Modifier
                 .fillMaxSize()
                 .scrollEndHaptic()
@@ -286,8 +301,8 @@ internal fun RecommendFeed(
                 end = 5.dp,
                 bottom = 66.dp + navBottomPadding(),
             ),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(gridSpacing),
+            verticalArrangement = Arrangement.spacedBy(gridSpacing),
         ) {
             if (shown.items.isEmpty()) {
                 item(key = "state", span = { GridItemSpan(maxLineSpan) }) {
@@ -324,6 +339,7 @@ internal fun RecommendFeed(
                     coverWidthPx = coverWidthPx,
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),
+                    columns = columns,
                     onOpen = { nav.push(Route.Video(video.bvid), origin) },
                     onWatchLater = rememberWatchLaterAction(container, video),
                     generateBackground = imageWorkActive && visible,

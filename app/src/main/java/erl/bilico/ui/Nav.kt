@@ -150,6 +150,7 @@ sealed interface Route {
         val cid: Long = 0L,
         val commentRootId: Long = 0L,
         val commentTargetId: Long = 0L,
+        val offline: Boolean = false,
     ) : Route
     data class LiveRoom(val roomId: Long) : Route
     data class Space(val mid: Long) : Route
@@ -157,17 +158,23 @@ sealed interface Route {
     data object Favorites : Route
     data class FavoriteFolder(val mediaId: Long, val title: String) : Route
     data object WatchLater : Route
-    data object Following : Route
     data object Downloads : Route
+    data object Following : Route
     data object PublishedRecords : Route
     data object Settings : Route
     data object BlockManager : Route
     data object About : Route
-    data class Pgc(val seasonId: Long, val epId: Long = 0L, val startSec: Long = 0L) : Route
+    data class Pgc(
+        val seasonId: Long,
+        val epId: Long = 0L,
+        val startSec: Long = 0L,
+        val offline: Boolean = false,
+    ) : Route
     data object Messages : Route
     data object BangumiFollow : Route
     data object Login : Route
     data object WebLogin : Route
+    data object WebProfileEdit : Route
     data class EmoteManager(val url: String) : Route
     data object Update : Route
     data class Article(
@@ -195,6 +202,7 @@ fun Route.supportsOrbOverlay(): Boolean =
             this !is Route.Chat &&
             this !is Route.Login &&
             this !is Route.WebLogin &&
+            this !is Route.WebProfileEdit &&
             this !is Route.EmoteManager
         )
 
@@ -536,36 +544,23 @@ class NavState {
         }
     }
 
-    /** 播放页的「首页」：退出所有二级页，回到第一个标签；符合应用内后台播放时缩进融合球。 */
+    /** 播放页的「首页」：退出所有二级页，回到第一个标签；符合应用内后台播放时缩进融合球，否则走标准退场动画。 */
     fun popToMain() {
+        val prevTab = mainTab
         mainTab = 0
-        val top = stack.lastOrNull()
-        if (stack.size >= 2 && top != null && canMinimizeSession(top) && orbOrigin?.bounds != null) {
-            while (stack.size > 2) {
-                stack.removeAt(1).discard()
-            }
-            pop()
-            return
+        val entry = stack.lastOrNull { !it.exiting } ?: return
+        val entryIndex = stack.indexOf(entry)
+        if (entryIndex <= 0) return
+        val hadIntermediate = entryIndex > 1
+        while (stack.indexOf(entry) > 1) {
+            stack.removeAt(1).discard()
         }
-        if (stack.size > 2 && top != null && canMinimizeSession(top)) {
-            top.exiting = false
-            top.previewing = false
-            top.minimizingToOrb = false
-            top.orbOverrideOrigin = null
-            minimizedEntry = top
-            stack.removeAt(stack.lastIndex)
-            host?.launch {
-                top.progress.snapTo(0f)
-                top.fade.snapTo(0f)
-            }
+        val willMinimize = canMinimizeSession(entry) && orbOrigin?.bounds != null
+        // 切回首页第一个标签或清掉中间页时，原卡片锚点已不在可见首页上；不缩进融合球就改为平滑右滑退场。
+        if (!willMinimize && (hadIntermediate || prevTab != 0)) {
+            entry.replaced = true
         }
-        while (stack.size > 1) {
-            val removed = stack.removeAt(stack.lastIndex)
-            if (removed.route.isPlayback() && minimizedEntry == null) {
-                appContext?.let(PlaybackBridge::pauseAndStopSession)
-            }
-            removed.discard()
-        }
+        pop()
     }
 
     fun reset(route: Route) {

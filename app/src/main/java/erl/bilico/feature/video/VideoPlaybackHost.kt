@@ -10,11 +10,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import erl.bilico.data.model.FeedVideo
 import erl.bilico.di.AppContainer
 import erl.bilico.player.BindPlaybackSession
 import erl.bilico.player.PlaybackBridge
@@ -30,6 +33,7 @@ import kotlinx.coroutines.delay
 internal class VideoPlaybackClock {
     var positionMs by mutableLongStateOf(0L)
     var durationMs by mutableLongStateOf(0L)
+    var bufferedMs by mutableLongStateOf(0L)
 }
 
 /**
@@ -59,6 +63,8 @@ internal fun VideoPlaybackEffects(
     onError: (PlaybackException) -> Unit,
     onClearError: () -> Unit,
     onVideoAspectChanged: (Float) -> Unit,
+    onPromptAutoNextRecommend: ((FeedVideo) -> Unit)? = null,
+    onCancelAutoNext: (() -> Unit)? = null,
 ) {
     val backgroundPlay by container.settings.backgroundPlay.collectAsStateWithLifecycle()
     val autoPip by container.settings.autoPip.collectAsStateWithLifecycle()
@@ -67,10 +73,13 @@ internal fun VideoPlaybackEffects(
     // 轮询协程不随 isTop 重启，读的是最新值。
     val currentIsTop by rememberUpdatedState(isTop)
     // 片源请求头与数据源只在这里构造：调用方只有拿到播放器才会组合进来，不进场就不碰 OkHttp。
+    val context = LocalContext.current
     val headers = remember(bvid) { container.client.mediaRequestHeaders(bvid) }
-    val dataSourceFactory = remember(headers) {
-        val upstream = OkHttpDataSource.Factory(container.client.mediaClient()).setDefaultRequestProperties(headers)
-        erl.bilico.player.PlaybackMediaCache.wrap(container.appContext, upstream)
+    val dataSourceFactory = remember(context, headers) {
+        val httpFactory = OkHttpDataSource.Factory(container.client.mediaClient())
+            .setDefaultRequestProperties(headers)
+        val cachedHttpFactory = erl.bilico.player.PlaybackMediaCache.wrap(container.appContext, httpFactory)
+        DefaultDataSource.Factory(context, cachedHttpFactory)
     }
 
     BindPlaybackSession(
@@ -107,8 +116,12 @@ internal fun VideoPlaybackEffects(
                     viewModel = viewModel,
                     nav = nav,
                     state = state,
+                    bvid = bvid,
+                    blocks = container.blocks.snapshot.value,
+                    onPromptAutoNextRecommend = onPromptAutoNextRecommend,
                 )
             },
+            onPlaybackLeaveEnded = onCancelAutoNext,
         )
     }
 
@@ -198,6 +211,7 @@ internal fun VideoPlaybackEffects(
             if (currentIsTop) {
                 clock.positionMs = position
                 clock.durationMs = player.duration.coerceAtLeast(0L)
+                clock.bufferedMs = player.bufferedPosition.coerceAtLeast(0L)
                 danmakuController.onPosition(position)
             }
         }

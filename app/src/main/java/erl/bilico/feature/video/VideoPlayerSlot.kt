@@ -32,6 +32,7 @@ import erl.bilico.data.util.Formatters
 import erl.bilico.di.AppContainer
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.NavState
+import erl.bilico.ui.Route
 import erl.bilico.ui.layerBackdropIf
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -64,8 +65,6 @@ internal fun BoxScope.VideoPlayerSlot(
     hdrVideo: Boolean,
     audioOnly: Boolean = false,
     onToggleAudioOnly: (() -> Unit)? = null,
-    onCacheVideo: (() -> Unit)? = null,
-    onCacheAudio: (() -> Unit)? = null,
     speed: Float,
     speedLocked: Boolean,
     longPressSpeed: LongPressSpeedController?,
@@ -87,10 +86,14 @@ internal fun BoxScope.VideoPlayerSlot(
     onSubmitSponsor: (() -> Unit)?,
     castDialog: (@Composable (Boolean) -> Unit)? = null,
     onCast: (() -> Unit)? = null,
+    downloadDialog: (@Composable (Boolean) -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
     reportVideoDialog: (@Composable (Boolean) -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
     onFullscreenChange: (Boolean) -> Unit,
     onEnterPip: (() -> Unit)?,
+    autoNextController: AutoNextRecommendController? = null,
+    showAutoNextInPlayer: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -102,6 +105,7 @@ internal fun BoxScope.VideoPlayerSlot(
     val swipeDownLockLongPressSpeed by container.settings.swipeDownLockLongPressSpeed.collectAsStateWithLifecycle()
     val gestureVolBright by container.settings.gestureVolumeBrightness.collectAsStateWithLifecycle()
     val fullscreenGestureHint by container.settings.fullscreenGestureHint.collectAsStateWithLifecycle()
+    val playerConicLight by container.settings.playerConicLight.collectAsStateWithLifecycle()
     val sponsorBlockEnabled by container.settings.sponsorBlockEnabled.collectAsStateWithLifecycle()
     val sponsorSkipMode by container.settings.sponsorSkipMode.collectAsStateWithLifecycle()
     val sponsorCategories by container.settings.sponsorCategories.collectAsStateWithLifecycle()
@@ -111,7 +115,8 @@ internal fun BoxScope.VideoPlayerSlot(
 
     val anyStageDialogOpen = fullscreen &&
         (danmakuSettingsDialogVisible || sponsorSubmitDialog != null ||
-            castDialog != null || reportVideoDialog != null)
+            castDialog != null || downloadDialog != null || reportVideoDialog != null)
+    val returnHome = LocalStageReturnHome.current ?: { nav.popToMain() }
     val episodesMenuItems = rememberEpisodesMenuItems(
         detail = state.detail,
         selectedCid = state.selectedCid,
@@ -125,6 +130,7 @@ internal fun BoxScope.VideoPlayerSlot(
         isPlaying = isPlaying,
         positionMs = clock.positionMs,
         durationMs = clock.durationMs.takeIf { it > 0L } ?: state.source?.durationMs ?: 0L,
+        bufferedMs = clock.bufferedMs,
         isBuffering = state.isPlaybackLoading || isBuffering,
         errorMessage = state.playbackError ?: playerError,
         qualityLabel = state.qualityLabel(),
@@ -132,8 +138,6 @@ internal fun BoxScope.VideoPlayerSlot(
         hdrVideo = hdrVideo,
         audioOnly = audioOnly,
         onToggleAudioOnly = onToggleAudioOnly,
-        onCacheVideo = onCacheVideo,
-        onCacheAudio = onCacheAudio,
         audioOnlyOverlay = {
             VideoAudioOnlyOverlay(
                 coverUrl = state.detail?.cover.orEmpty(),
@@ -151,6 +155,7 @@ internal fun BoxScope.VideoPlayerSlot(
         hapticEnabled = gestureHaptic,
         volumeBrightnessEnabled = gestureVolBright,
         fullscreenHintEnabled = fullscreenGestureHint,
+        conicLightEnabled = playerConicLight,
         qualities = state.source?.qualities.orEmpty(),
         activeQuality = state.activeQuality,
         onSelectQuality = { qn -> viewModel.selectQuality(qn, player.currentPosition) },
@@ -175,12 +180,13 @@ internal fun BoxScope.VideoPlayerSlot(
         selectedSubtitleKey = subtitleController.selectedTrackKey,
         onSelectSubtitle = subtitleController::selectTrack,
         onEnterPip = onEnterPip,
-        onHome = { nav.popToMain() },
+        onHome = returnHome,
         onWatchLater = viewModel::addToWatchLater,
         playbackEndMode = playbackEndMode,
         onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
         onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
         onCast = onCast,
+        onDownload = onDownload,
         onReportVideo = onReportVideo,
         longPressSpeed = longPressSpeed,
         longPressSpeedMode = resolveLongPressSpeedMode(
@@ -209,6 +215,24 @@ internal fun BoxScope.VideoPlayerSlot(
                     onDismissPrompt = { sponsorController.dismissPromptSegment() },
                     onJumpPoi = { sponsorController.jumpToPoi(player) },
                     onDismissPoi = { sponsorController.dismissPoi() },
+                )
+            }
+        },
+        autoNextOverlay = { bottomPad, endPad ->
+            if (showAutoNextInPlayer && autoNextController != null) {
+                AutoNextRecommendOverlay(
+                    video = autoNextController.target,
+                    remainingSeconds = autoNextController.remainingSeconds,
+                    totalSeconds = autoNextController.totalSeconds,
+                    fullscreen = fullscreen,
+                    bottomPad = bottomPad,
+                    endPad = endPad,
+                    onPlayNow = {
+                        autoNextController.consumeTarget()?.let { next ->
+                            nav.replaceTop(Route.Video(next.bvid, 0L))
+                        }
+                    },
+                    onDismiss = autoNextController::cancel,
                 )
             }
         },
@@ -263,7 +287,7 @@ internal fun BoxScope.VideoPlayerSlot(
                 onSelectCoin = {},
                 onDismissCoin = {},
                 favoriteFolders = null,
-                onSelectFavorite = {},
+                onConfirmFavorite = { _, _, _ -> },
                 onDismissFavorite = {},
                 danmakuSettingsDialogVisible = danmakuSettingsDialogVisible,
                 danmakuSettings = danmakuSettings,
@@ -271,6 +295,7 @@ internal fun BoxScope.VideoPlayerSlot(
                 onDismissDanmakuSettings = onDismissDanmakuSettings,
                 sponsorSubmitDialog = sponsorSubmitDialog,
                 castDialog = castDialog,
+                downloadDialog = downloadDialog,
                 reportVideoDialog = reportVideoDialog,
                 inlineInStage = true,
             )
@@ -345,15 +370,17 @@ internal fun VideoCollapsedBarSlot(
     state: VideoUiState,
     backdrop: LayerBackdrop?,
     onCast: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val slotHeight = LocalPortraitSlotHeight.current
+    val returnHome = LocalStageReturnHome.current ?: { nav.popToMain() }
     val playbackEndMode by container.settings.playbackEndMode.collectAsStateWithLifecycle()
     CollapsedVideoBar(
         isPlaying = isPlaying,
         onBack = { nav.pop() },
-        onHome = { nav.popToMain() },
+        onHome = returnHome,
         onPlayPause = {
             val p = player ?: return@CollapsedVideoBar
             if (p.isPlaying) p.pause() else p.play()
@@ -363,6 +390,7 @@ internal fun VideoCollapsedBarSlot(
         onSelectPlaybackEndMode = container.settings::setPlaybackEndMode,
         onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
         onCast = onCast,
+        onDownload = onDownload,
         onReportVideo = onReportVideo,
         backdrop = backdrop,
     )

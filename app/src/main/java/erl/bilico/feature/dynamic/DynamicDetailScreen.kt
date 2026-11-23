@@ -76,6 +76,7 @@ import erl.bilico.ui.layerBackdropIf
 import erl.bilico.ui.pageContainerColor
 import erl.bilico.ui.pinnedHeight
 import erl.bilico.ui.reportTopBarBottom
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.Card
@@ -168,6 +169,7 @@ fun DynamicDetailScreen(
     }
 
     val listState = rememberLazyListState()
+    BindScrollToTop(listState)
     LaunchedEffect(commentState?.focusRootId, commentState?.items?.size) {
         val focusId = commentState?.focusRootId ?: 0L
         if (focusId > 0L && !commentState?.items.isNullOrEmpty()) {
@@ -296,7 +298,7 @@ fun DynamicDetailScreen(
                             item(key = "comment-section") {
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                                    insideMargin = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                                 ) {
                                     val totalComments = maxOf(commentState.total, currentItem.commentCount)
                                     Row(

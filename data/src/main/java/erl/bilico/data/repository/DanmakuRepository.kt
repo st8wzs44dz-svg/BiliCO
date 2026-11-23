@@ -18,6 +18,10 @@ class DanmakuRepository(
     private val session: SessionRepository,
     private val publishedRecords: PublishedRecordRepository? = null,
 ) {
+    /** 本地离线弹幕读取钩子：命中缓存分段时直接离线解析，无需联网等待超时。 */
+    @Volatile
+    var localSegmentLoader: ((cid: Long, index: Int) -> ByteArray?)? = null
+
     private val cache = object : LinkedHashMap<Long, List<DanmakuItem>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<DanmakuItem>>) =
             size > MAX_SEGMENTS
@@ -27,6 +31,16 @@ class DanmakuRepository(
         if (cid <= 0L || index < 1) return@withContext emptyList()
         val key = cid * 1000L + index
         synchronized(cache) { cache[key] }?.let { return@withContext it }
+
+        localSegmentLoader?.invoke(cid, index)?.let { localBytes ->
+            val localItems = withContext(Dispatchers.Default) {
+                runCatching { DanmakuProto.parse(localBytes) }.getOrNull()
+            }
+            if (localItems != null) {
+                synchronized(cache) { cache[key] = localItems }
+                return@withContext localItems
+            }
+        }
 
         val rawBytes = runCatching {
             buvid.ensure()
@@ -39,6 +53,15 @@ class DanmakuRepository(
         }
         synchronized(cache) { cache[key] = items }
         items
+    }
+
+    /** 下载原始 protobuf 弹幕分片字节，供离线缓存落盘。 */
+    suspend fun fetchRawSegment(cid: Long, index: Int): ByteArray? = withContext(Dispatchers.IO) {
+        if (cid <= 0L || index < 1) return@withContext null
+        runCatching {
+            buvid.ensure()
+            api.danmakuSegment(oid = cid, segmentIndex = index).use { it.bytes() }
+        }.getOrNull()
     }
 
     /** 发一条滚动弹幕。成功后丢掉当前段的缓存，并返回服务端生成的 dmid（若未下发则返回 0）。 */

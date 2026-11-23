@@ -27,13 +27,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +48,7 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -69,6 +73,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
@@ -78,7 +85,7 @@ import erl.bilico.di.LocalAppContainer
 import erl.bilico.feature.article.ArticleScreen
 import erl.bilico.feature.chat.ChatScreen
 import erl.bilico.feature.comment.EmoteManagerScreen
-import erl.bilico.feature.download.DownloadScreen
+import erl.bilico.feature.download.DownloadsScreen
 import erl.bilico.feature.dynamic.DynamicDetailScreen
 import erl.bilico.feature.dynamic.DynamicScreen
 import erl.bilico.feature.dynamic.ImageViewerOverlay
@@ -94,6 +101,7 @@ import erl.bilico.feature.login.LoginScreen
 import erl.bilico.feature.login.WebLoginScreen
 import erl.bilico.feature.me.MeScreen
 import erl.bilico.feature.me.PublishedRecordsScreen
+import erl.bilico.feature.me.WebProfileEditScreen
 import erl.bilico.feature.message.MessageScreen
 import erl.bilico.feature.pgc.BangumiFollowScreen
 import erl.bilico.feature.pgc.PgcScreen
@@ -168,7 +176,40 @@ internal fun BiliCoRoot(
     val returnBounce by container.settings.returnBounce.collectAsStateWithLifecycle()
     val predictiveBackFollow by container.settings.predictiveBackFollow.collectAsStateWithLifecycle()
     val darkMode by container.settings.darkMode.collectAsStateWithLifecycle()
+    val account by container.session.account.collectAsStateWithLifecycle()
     val dark = isDarkTheme(darkMode)
+
+    // 登录态变化、从消息/聊天页返回首页以及前台保活期间定时拉取 B 站通知与私信未读数。
+    val currentTopRoute = nav.stack.lastOrNull { !it.exiting }?.route
+    var prevTopRoute by remember { mutableStateOf<Route?>(null) }
+    LaunchedEffect(account?.mid) {
+        container.messages.refreshUnread(force = true)
+    }
+    LaunchedEffect(currentTopRoute) {
+        val prev = prevTopRoute
+        prevTopRoute = currentTopRoute
+        if (currentTopRoute == Route.Main && (prev == Route.Messages || prev is Route.Chat)) {
+            container.messages.refreshUnread(force = true)
+        }
+    }
+    LaunchedEffect(account?.mid, currentTopRoute) {
+        if (account != null && currentTopRoute == Route.Main) {
+            while (isActive) {
+                delay(60_000L)
+                container.messages.refreshUnread(force = true)
+            }
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch { container.messages.refreshUnread(force = false) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     SideEffect {
         nav.attach(scope, context)
         nav.orbOrigin = orbOrigin
@@ -647,6 +688,7 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
             initialCid = route.cid,
             commentRootId = route.commentRootId,
             commentTargetId = route.commentTargetId,
+            offline = route.offline,
         )
         is Route.LiveRoom -> LiveRoomScreen(container, nav, route.roomId)
         is Route.Space -> SpaceScreen(nav, container, route.mid)
@@ -654,14 +696,14 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         Route.Favorites -> FavoriteFoldersScreen(container, nav)
         is Route.FavoriteFolder -> FavoriteFolderScreen(container, nav, route.mediaId, route.title)
         Route.WatchLater -> WatchLaterScreen(container, nav)
+        Route.Downloads -> DownloadsScreen(container, nav)
         Route.Following -> FollowingScreen(container, nav)
-        Route.Downloads -> DownloadScreen(container, nav)
         Route.PublishedRecords -> PublishedRecordsScreen(container, nav)
         Route.Settings -> SettingsScreen(container, nav)
         Route.BlockManager -> BlockManagerScreen(container, nav)
         Route.About -> AboutScreen(container, nav)
         is Route.Pgc -> BiliCoTheme(darkMode = 2) {
-            PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000)
+            PgcScreen(container, nav, route.seasonId, route.epId, route.startSec * 1000, route.offline)
         }
         Route.Messages -> MessageScreen(container, nav)
         Route.BangumiFollow -> BiliCoTheme(darkMode = 2) {
@@ -669,6 +711,7 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         }
         Route.Login -> LoginScreen(container, nav)
         Route.WebLogin -> WebLoginScreen(container, nav)
+        Route.WebProfileEdit -> WebProfileEditScreen(container, nav)
         is Route.EmoteManager -> EmoteManagerScreen(container, nav, route.url)
         Route.Update -> UpdateScreen(container, nav)
         is Route.Article -> ArticleScreen(

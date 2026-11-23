@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +75,7 @@ import erl.bilico.ui.components.LocalOpenBvid
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.layerBackdropIf
 import erl.bilico.ui.pageContainerColor
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CircularProgressIndicator
 import io.github.suqi8.coui.kmp.basic.LocalEdgeToEdge
@@ -105,6 +107,7 @@ internal fun ReplyDetailOverlay(
 ) {
     var displayedThread by remember { mutableStateOf<Pair<Comment, Long>?>(null) }
     val activeRoot = controller.root
+    BindScrollToTop(listState, enabled = activeRoot != null)
     if (activeRoot != null) {
         val pool = latestItems.ifEmpty { controller.itemsSnapshot }
         val synced = pool.firstOrNull { it.id == activeRoot.id } ?: activeRoot
@@ -170,6 +173,7 @@ internal fun ReplyDetailPage(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    BindScrollToTop(listState)
     val account by container.session.account.collectAsStateWithLifecycle()
     val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()
     val currentMid = account?.mid ?: container.session.mid()
@@ -264,13 +268,14 @@ internal fun ReplyDetailPage(
         pictures = pictures + uris.take(room)
     }
 
-    BackHandler(enabled = backEnabled) {
-        if (emotePanelOpen) {
-            emotePanelOpen = false
-        } else {
-            onClose()
-        }
+    // 表情面板打开时返回先收面板；其余情况走预测性返回，整页跟着手势往下退。
+    BackHandler(enabled = backEnabled && emotePanelOpen) {
+        emotePanelOpen = false
     }
+    val backFollow = rememberReplyDetailBackFollow(
+        enabled = backEnabled && !emotePanelOpen && imageViewer == null,
+        onClose = onClose,
+    )
 
     LaunchedEffect(comment.id) {
         listState.scrollToItem(0)
@@ -379,6 +384,10 @@ internal fun ReplyDetailPage(
         Box(
             modifier = modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    val follow = backFollow.value
+                    if (follow < 1f) translationY = (1f - follow) * size.height
+                }
                 .background(pageBg)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -395,9 +404,9 @@ internal fun ReplyDetailPage(
                     .background(listBackground)
                     .scrollEndHaptic(),
                 contentPadding = PaddingValues(
-                    start = 16.dp,
+                    start = 12.dp,
                     top = topInset + REPLY_TOP_BAR_HEIGHT + 12.dp,
-                    end = 16.dp,
+                    end = 12.dp,
                     bottom = listBottomPadding,
                 ),
             ) {

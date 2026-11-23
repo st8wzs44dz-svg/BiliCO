@@ -52,20 +52,16 @@ fun VideoScreen(
     initialCid: Long = 0L,
     commentRootId: Long = 0L,
     commentTargetId: Long = 0L,
+    offline: Boolean = false,
 ) {
     // 一个播放页只建一份 ViewModel：连播换下一条、甚至退出再点进来，都复用同一份。
     // 以前把 bvid 拼进 key，每看一条就多留一份 ViewModel 和一条播放地址，全挂在 Activity 的
     // ViewModelStore 上永不释放，切十几条就把 Java 堆吃满闪退。
     val viewModel: VideoViewModel = viewModel(key = "video") {
         VideoViewModel(
-            repository = container.video,
-            heartbeat = container.heartbeat,
-            interactions = container.interactions,
-            session = container.session,
-            settings = container.settings,
-            bvid = bvid,
-            startPositionMs = startPositionMs,
-            initialCid = initialCid,
+            container.video, container.downloads, container.heartbeat,
+            container.interactions, container.session, container.settings,
+            bvid, startPositionMs, initialCid, offline,
         )
     }
     val currentState by viewModel.state.collectAsStateWithLifecycle()
@@ -91,6 +87,7 @@ fun VideoScreen(
     val autoRotateMode by container.settings.autoRotateMode.collectAsStateWithLifecycle()
     val speedLocked by container.settings.speedLocked.collectAsStateWithLifecycle()
     val lockedSpeed by container.settings.lockedSpeed.collectAsStateWithLifecycle()
+    val showVideoDislike by container.settings.showVideoDislike.collectAsStateWithLifecycle()
     val inPipMode = LocalInPipMode.current
 
     val scope = rememberCoroutineScope()
@@ -152,7 +149,7 @@ fun VideoScreen(
         }
         onDispose { }
     }
-    LaunchedEffect(isTop, bvid, startPositionMs, initialCid) {
+    LaunchedEffect(isTop, bvid, startPositionMs, initialCid, offline) {
         if (!isTop) return@LaunchedEffect
         if (nav.minimizedEntry?.route is Route.Video) {
             nav.dismissMinimized(pausePlayback = false)
@@ -165,10 +162,11 @@ fun VideoScreen(
                 bvid = bvid,
                 startPositionMs = if (cached != null) savedPositionMs else startPositionMs,
                 initialCid = initialCid,
+                offline = offline,
                 cachedState = cached,
             )
         } else {
-            viewModel.switchTo(bvid, startPositionMs, initialCid)
+            viewModel.switchTo(bvid, startPositionMs, initialCid, offline = offline)
         }
     }
 
@@ -202,6 +200,7 @@ fun VideoScreen(
     var danmakuSettingsDialogVisible by remember { mutableStateOf(false) }
     var sponsorSubmitVisible by remember { mutableStateOf(false) }
     var castDialogVisible by remember { mutableStateOf(false) }
+    var downloadDialogVisible by remember { mutableStateOf(false) }
     var reportVideoVisible by remember { mutableStateOf(false) }
     var coinDialogVisible by remember { mutableStateOf(false) }
     var favoriteFolders by remember { mutableStateOf<List<FavoriteFolder>?>(null) }
@@ -269,6 +268,9 @@ fun VideoScreen(
     }
 
     val playbackAttempts = remember(player) { player?.let { PlaybackAttempts(it) { effectiveSpeed } } }
+    val (autoNextController, promptAutoNext) = rememberAutoNextRecommendController(
+        bvid, isTop, inPipMode, container, nav,
+    )
 
     if (player != null) {
         VideoPlaybackEffects(
@@ -295,14 +297,15 @@ fun VideoScreen(
                 // 线路坏了先换一条，候选表走完才把错误抛给界面。
                 if (playbackAttempts?.next() != true) playerError = describePlaybackError(error)
             },
-            onClearError = { playerError = null },
-            onVideoAspectChanged = { playerVideoAspect = it },
+            onClearError = { playerError = null }, onVideoAspectChanged = { playerVideoAspect = it },
+            onPromptAutoNextRecommend = promptAutoNext, onCancelAutoNext = autoNextController::cancel,
         )
     }
 
     var routeInitialized by remember { mutableStateOf(false) }
     LaunchedEffect(bvid, startPositionMs, initialCid) {
         nav.playQueue.sync(bvid)
+        autoNextController.cancel()
         if (!routeInitialized) {
             routeInitialized = true
             return@LaunchedEffect
@@ -346,6 +349,7 @@ fun VideoScreen(
                 bvid = bvid,
                 aid = state.detail?.aid ?: 0L,
                 cid = cid,
+                preferLocal = state.offlineMode,
                 onAuxiliaryLoaded = { info ->
                     val seekMs = viewModel.applyServerResumeHint(info.lastPlayCid, info.lastPlayTimeMs)
                     if (player != null && seekMs > 0L && player.playbackState != Player.STATE_IDLE && player.currentPosition < 3_000L) {
@@ -377,7 +381,20 @@ fun VideoScreen(
     val detailAid = state.detail?.aid ?: 0L
     val openSponsor = if (state.selectedCid > 0L) ({ sponsorSubmitVisible = true }) else null
     val openCast = if (state.selectedCid > 0L) ({ castDialogVisible = true }) else null
+    val openDownload = if (state.detail != null) ({ downloadDialogVisible = true }) else null
     val openReportVideo = if (detailAid > 0L) ({ reportVideoVisible = true }) else null
+    val downloadTasks by container.downloads.tasks.collectAsStateWithLifecycle()
+    val currentPartCached = remember(downloadTasks, bvid, state.selectedCid) {
+        container.downloads.hasCompletedVideo(bvid, state.selectedCid)
+    }
+    val renderDownload = erl.bilico.feature.download.rememberVideoDownloadDialog(
+        visible = downloadDialogVisible, container = container, detail = state.detail,
+        selectedCid = state.selectedCid, activeQuality = state.activeQuality,
+        qualities = state.source?.qualities.orEmpty(),
+        onEnqueued = { if (it > 0) viewModel.showMessage("已加入离线缓存队列 ($it)") },
+        onOpenDownloads = { applyFullscreen(false); nav.push(Route.Downloads) },
+        onDismiss = { downloadDialogVisible = false },
+    )
     val renderSponsorSubmit = rememberSponsorSubmitDialog(
         visible = sponsorSubmitVisible, bvid = bvid, cid = state.selectedCid, durationMs = clock.durationMs,
         currentPositionMs = { player?.currentPosition?.coerceAtLeast(0L) ?: clock.positionMs },
@@ -397,19 +414,17 @@ fun VideoScreen(
     )
 
     val selectPart: (Int) -> Unit = { index ->
+        autoNextController.cancel()
         val currentPos = player?.currentPosition ?: 0L
         viewModel.flushHeartbeat(currentPos / 1000, container.scope)
         viewModel.selectPart(index, currentPos)
     }
     val selectEpisode: (VideoEpisode) -> Unit = { episode ->
+        autoNextController.cancel()
         val partIndex = state.detail?.pages?.indexOfFirst { it.cid == episode.cid } ?: -1
-        if (episode.bvid == bvid && partIndex >= 0) {
-            selectPart(partIndex)
-        } else if (fullscreen) {
-            nav.replaceTop(Route.Video(episode.bvid, 0L, episode.cid))
-        } else {
-            nav.push(Route.Video(episode.bvid, 0L, episode.cid))
-        }
+        if (episode.bvid == bvid && partIndex >= 0) selectPart(partIndex)
+        else if (fullscreen) nav.replaceTop(Route.Video(episode.bvid, 0L, episode.cid))
+        else nav.push(Route.Video(episode.bvid, 0L, episode.cid))
     }
 
     VideoFullscreenStage(
@@ -418,6 +433,7 @@ fun VideoScreen(
         inPipMode = inPipMode,
         activity = activity,
         darkMode = darkMode,
+        onExitFullscreen = { applyFullscreen(false) },
         videoAspect = effectiveVideoAspect,
         portraitResizable = true,
         playing = playIntent,
@@ -456,46 +472,6 @@ fun VideoScreen(
                         audioOnly = next
                         viewModel.showMessage(if (next) "已切换听视频（纯音频）" else "已恢复视频画面")
                     },
-                    onCacheVideo = state.source?.let { src ->
-                        {
-                            scope.launch {
-                                val res = container.downloads.enqueue(
-                                    bvid = bvid,
-                                    cid = state.selectedCid,
-                                    title = state.detail?.title.orEmpty(),
-                                    upName = state.detail?.upName.orEmpty(),
-                                    coverUrl = state.detail?.cover.orEmpty(),
-                                    source = src,
-                                    kind = erl.bilico.data.model.DownloadKind.VIDEO,
-                                )
-                                res.onSuccess { added ->
-                                    viewModel.showMessage(if (added) "已加入离线缓存，可在「我的 → 离线缓存」查看或导出" else "该视频已在缓存队列中")
-                                }.onFailure { err ->
-                                    viewModel.showMessage(err.message ?: "缓存失败")
-                                }
-                            }
-                        }
-                    },
-                    onCacheAudio = state.source?.takeIf { !it.audioUrl.isNullOrBlank() }?.let { src ->
-                        {
-                            scope.launch {
-                                val res = container.downloads.enqueue(
-                                    bvid = bvid,
-                                    cid = state.selectedCid,
-                                    title = state.detail?.title.orEmpty(),
-                                    upName = state.detail?.upName.orEmpty(),
-                                    coverUrl = state.detail?.cover.orEmpty(),
-                                    source = src,
-                                    kind = erl.bilico.data.model.DownloadKind.AUDIO_ONLY,
-                                )
-                                res.onSuccess { added ->
-                                    viewModel.showMessage(if (added) "已加入音频缓存，可在「我的 → 离线缓存」导出 M4A" else "该音频已在缓存队列中")
-                                }.onFailure { err ->
-                                    viewModel.showMessage(err.message ?: "缓存失败")
-                                }
-                            }
-                        }
-                    },
                     speed = speed,
                     speedLocked = speedLocked,
                     longPressSpeed = longPressSpeed,
@@ -514,9 +490,12 @@ fun VideoScreen(
                     onDismissDanmakuSettings = { danmakuSettingsDialogVisible = false },
                     sponsorSubmitDialog = renderSponsorSubmit, onSubmitSponsor = openSponsor,
                     castDialog = renderCast, onCast = openCast,
+                    downloadDialog = renderDownload, onDownload = openDownload,
                     reportVideoDialog = renderReportVideo, onReportVideo = openReportVideo,
                     onFullscreenChange = applyFullscreen,
                     onEnterPip = if (PlaybackBridge.canEnterPip(activity)) { { PlaybackBridge.enterPipNow(activity) } } else null,
+                    autoNextController = autoNextController,
+                    showAutoNextInPlayer = fullscreen || playbackEntry?.collapsedBarVisible != true,
                 )
             }
         },
@@ -551,85 +530,45 @@ fun VideoScreen(
                         viewModel.showLoginHint()
                     } else {
                         scope.launch {
-                            container.favorites.folders(container.session.mid())
+                            container.favorites.folders(container.session.mid(), state.detail?.aid)
                                 .onSuccess { favoriteFolders = it }
                                 .onFailure { viewModel.showMessage(it.message ?: "收藏夹加载失败") }
                         }
                     }
                 },
                 onShare = { shareVideo(context, state.detail?.title.orEmpty(), bvid) },
-                onCacheVideo = state.source?.let { src ->
-                    {
-                        scope.launch {
-                            val res = container.downloads.enqueue(
-                                bvid = bvid,
-                                cid = state.selectedCid,
-                                title = state.detail?.title.orEmpty(),
-                                upName = state.detail?.upName.orEmpty(),
-                                coverUrl = state.detail?.cover.orEmpty(),
-                                source = src,
-                                kind = erl.bilico.data.model.DownloadKind.VIDEO,
-                            )
-                            res.onSuccess { added ->
-                                viewModel.showMessage(if (added) "已加入离线缓存，可在「我的 → 离线缓存」查看或导出" else "该视频已在缓存队列中")
-                            }.onFailure { err ->
-                                viewModel.showMessage(err.message ?: "缓存失败")
-                            }
-                        }
-                    }
-                },
-                onCacheAudio = state.source?.takeIf { !it.audioUrl.isNullOrBlank() }?.let { src ->
-                    {
-                        scope.launch {
-                            val res = container.downloads.enqueue(
-                                bvid = bvid,
-                                cid = state.selectedCid,
-                                title = state.detail?.title.orEmpty(),
-                                upName = state.detail?.upName.orEmpty(),
-                                coverUrl = state.detail?.cover.orEmpty(),
-                                source = src,
-                                kind = erl.bilico.data.model.DownloadKind.AUDIO_ONLY,
-                            )
-                            res.onSuccess { added ->
-                                viewModel.showMessage(if (added) "已加入音频缓存，可在「我的 → 离线缓存」导出 M4A" else "该音频已在缓存队列中")
-                            }.onFailure { err ->
-                                viewModel.showMessage(err.message ?: "缓存失败")
-                            }
-                        }
-                    }
-                },
+                onDownload = openDownload,
+                downloaded = currentPartCached,
                 onSeekCommentMs = { ms ->
                     player?.seekTo(ms)
                     if (player?.isPlaying == false) player.play()
                 },
-                onLike = viewModel::toggleLike,
-                onDislike = viewModel::toggleDislike,
-                onWatchLater = viewModel::addToWatchLater,
-                onFollow = viewModel::toggleFollow,
-                onOpenUser = { mid -> if (mid > 0L) nav.push(Route.Space(mid)) },
-                onOpenVideo = { next -> nav.push(Route.Video(next)) },
-                chapters = subtitleController.chapters,
-                positionMsProvider = { clock.positionMs },
-                onSelectChapter = { chapter ->
-                    player?.seekTo(chapter.fromMs)
+                onLike = viewModel::toggleLike, onTriple = viewModel::triple,
+                onDislike = viewModel::toggleDislike, showDislike = showVideoDislike,
+                onWatchLater = viewModel::addToWatchLater, onFollow = viewModel::toggleFollow,
+                onOpenUser = { if (it > 0L) nav.push(Route.Space(it)) },
+                onOpenVideo = { nav.push(Route.Video(it)) },
+                chapters = subtitleController.chapters, positionMsProvider = { clock.positionMs },
+                onSelectChapter = {
+                    player?.seekTo(it.fromMs)
                     if (player?.isPlaying == false) player.play()
                 },
                 onOpenChapters = { chapterDialogVisible = true },
-                barBackdrops = barBackdrops,
-                blurActive = blurActive,
-                backEnabled = !fullscreen,
-                commentRootId = commentRootId,
-                commentTargetId = commentTargetId,
+                barBackdrops = barBackdrops, blurActive = blurActive, backEnabled = !fullscreen,
+                commentRootId = commentRootId, commentTargetId = commentTargetId,
             )
         },
         portraitOverlay = {
             VideoMessageToast(message = message, inPipMode = inPipMode, inFullscreen = false)
+            if (!fullscreen && playbackEntry?.collapsedBarVisible == true) {
+                PortraitCollapsedAutoNextOverlay(autoNextController, nav)
+            }
         },
         portraitCollapsedBar = {
             VideoCollapsedBarSlot(
                 player = player, isPlaying = isPlaying, container = container, nav = nav,
                 bvid = bvid, state = state, backdrop = barBackdrops.barMaterial,
-                onCast = openCast, onReportVideo = openReportVideo,
+                onCast = openCast, onDownload = openDownload, onReportVideo = openReportVideo,
             )
         },
     )
@@ -638,15 +577,15 @@ fun VideoScreen(
     if (!fullscreen && (
             coinDialogVisible || favoriteFolders != null || danmakuSettingsDialogVisible ||
                 chapterDialogVisible || renderSponsorSubmit != null ||
-                renderCast != null || renderReportVideo != null
+                renderCast != null || renderDownload != null || renderReportVideo != null
             )
     ) {
         VideoScreenDialogs(
             coinDialogVisible = coinDialogVisible, coined = state.coined,
-            onSelectCoin = { count -> coinDialogVisible = false; viewModel.coin(count) },
+            onSelectCoin = { coinDialogVisible = false; viewModel.coin(it) },
             onDismissCoin = { coinDialogVisible = false },
             favoriteFolders = favoriteFolders,
-            onSelectFavorite = { mediaId -> favoriteFolders = null; viewModel.favorite(mediaId) },
+            onConfirmFavorite = { add, del, fav -> favoriteFolders = null; viewModel.favorite(add, del, fav) },
             onDismissFavorite = { favoriteFolders = null },
             danmakuSettingsDialogVisible = danmakuSettingsDialogVisible,
             danmakuSettings = if (danmakuSettingsDialogVisible) container.settings.danmakuSettings.collectAsStateWithLifecycle().value else null,
@@ -654,23 +593,20 @@ fun VideoScreen(
             onDismissDanmakuSettings = { danmakuSettingsDialogVisible = false },
             chapterDialogVisible = chapterDialogVisible, chapters = subtitleController.chapters,
             positionMs = clock.positionMs,
-            onSelectChapter = { chapter ->
+            onSelectChapter = {
                 chapterDialogVisible = false
-                player?.seekTo(chapter.fromMs)
+                player?.seekTo(it.fromMs)
                 if (player?.isPlaying == false) player.play()
             },
             onDismissChapter = { chapterDialogVisible = false },
-            sponsorSubmitDialog = renderSponsorSubmit,
-            castDialog = renderCast,
-            reportVideoDialog = renderReportVideo,
+            sponsorSubmitDialog = renderSponsorSubmit, castDialog = renderCast,
+            downloadDialog = renderDownload, reportVideoDialog = renderReportVideo,
             inlineInStage = false,
         )
     }
 
     PlayQueueSheet(
-        visible = queueSheetVisible,
-        queue = nav.playQueue,
-        onDismiss = { queueSheetVisible = false },
+        visible = queueSheetVisible, queue = nav.playQueue, onDismiss = { queueSheetVisible = false },
         onPlay = { queued ->
             queueSheetVisible = false
             if (queued.video.bvid != nav.playQueue.playingBvid) {

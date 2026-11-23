@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  COUI_REF: 14d1258b2076f9d9d5f5b47a8a4b71dcb5a6249a
+  COUI_REF: 7135f75aa4346fa03e589e0e41235386f309bdd8
 
 jobs:
   build:

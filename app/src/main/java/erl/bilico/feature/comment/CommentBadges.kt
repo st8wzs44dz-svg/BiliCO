@@ -1,10 +1,14 @@
 package erl.bilico.feature.comment
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -24,21 +28,31 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
-import androidx.compose.ui.graphics.vector.path
+import erl.bilico.ui.components.SECONDARY_ALPHA
+import erl.bilico.ui.components.VectorLayer
+import erl.bilico.ui.components.dualToneVector
+import erl.bilico.ui.components.roundedRectPath
+import erl.bilico.ui.components.unifiedStrokeIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import erl.bilico.data.model.CommentSailing
 import erl.bilico.data.util.Formatters
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.theme.COUITheme
 
 /**
  * 右上角装扮立绘 + 号码牌：
  * B 站 `cardbg.image` 统一为 `972×162`（6:1）透明横图，角色立绘固定位于水平 `[0.68, 0.83]` 槽位。
- * 用 `44dp×36dp` 视窗配合显式 `Layout` 精准对齐原图立绘中心（`0.758 * 216dp`），
+ * 用 `38dp×32dp` 视窗配合显式 `Layout` 精准对齐原图立绘中心（`0.758 * 192dp`），
  * 右侧紧邻绘制两行方折数码字体（`· NO.` 与 `032469`）。
  */
 @Composable
@@ -47,9 +61,9 @@ internal fun CommentSailingBadge(
     isDark: Boolean,
 ) {
     val density = LocalDensity.current
-    val fullBannerWidthDp = 216.dp
-    val bannerHeightDp = 36.dp
-    val cropWidthDp = 44.dp
+    val fullBannerWidthDp = 192.dp
+    val bannerHeightDp = 32.dp
+    val cropWidthDp = 38.dp
     val requestWidthPx = with(density) { fullBannerWidthDp.roundToPx() }
     val sizedBannerUrl = remember(sailing.imageUrl, requestWidthPx) {
         Formatters.widthImageUrl(sailing.imageUrl, requestWidthPx)
@@ -360,40 +374,56 @@ internal val ReplyCurveIcon: ImageVector by lazy {
 }
 
 internal val LikeOutlineIcon: ImageVector by lazy {
-    commentVector(
+    unifiedStrokeIcon(
         name = "LikeOutline",
-        path = "M9,21h9c0.83,0 1.54,-0.5 1.84,-1.22l3.02,-7.05c0.09,-0.23 0.14,-0.47 0.14,-0.73v-2" +
-            "c0,-1.1 -0.9,-2 -2,-2h-6.31l0.95,-4.57 0.03,-0.32c0,-0.41 -0.17,-0.79 -0.44,-1.06L14.17,1 " +
-            "7.58,7.59C7.22,7.95 7,8.45 7,9v10c0,1.1 0.9,2 2,2zM9,9l4.34,-4.34L12,10h9v2l-3,7H9V9z" +
-            "M1,9h4v12H1V9z",
+        paths = listOf(
+            "M7.4,10.3V19.9H4.8C3.75,19.9 3.1,19.25 3.1,18.2V12C3.1,10.95 3.75,10.3 4.8,10.3H7.4Z",
+            "M7.4,10.3L10.95,4.35C11.45,3.5 12.55,3.25 13.4,3.75C14.15,4.18 14.5,5.05 14.25,5.88" +
+                "L13.35,9.1H18.1C19.75,9.1 20.9,10.28 20.72,11.92L20.02,17.65" +
+                "C19.82,19.05 18.65,19.9 17.15,19.9H7.4",
+        ),
     )
 }
 
 internal val LikeFilledIcon: ImageVector by lazy {
-    commentVector(
+    dualToneVector(
         name = "LikeFilled",
-        path = "M1,21h4V9H1v12zm22,-11c0,-1.1 -0.9,-2 -2,-2h-6.31l0.95,-4.57 0.03,-0.32" +
-            "c0,-0.41 -0.17,-0.79 -0.44,-1.06L14.17,1 7.59,7.59C7.22,7.95 7,8.45 7,9v10" +
-            "c0,1.1 0.9,2 2,2h9c0.83,0 1.54,-0.5 1.84,-1.22l3.02,-7.05c0.09,-0.23 0.14,-0.47 0.14,-0.73v-2z",
+        layers = listOf(
+            VectorLayer(path = roundedRectPath(2.2f, 9.8f, 4.5f, 11.0f, 1.7f), alpha = SECONDARY_ALPHA),
+            VectorLayer(
+                path = "M8.3,10.1L11.55,3.85C12.05,2.9 13.25,2.62 14.15,3.18" +
+                    "C14.95,3.68 15.32,4.65 15.02,5.55L13.92,8.95H18.45" +
+                    "C20.42,8.95 21.85,10.42 21.58,12.38L20.82,17.95" +
+                    "C20.56,19.68 19.15,20.8 17.4,20.8H10.2C8.95,20.8 8.3,20.15 8.3,18.9V10.1Z",
+            ),
+        ),
     )
 }
 
 internal val DislikeOutlineIcon: ImageVector by lazy {
-    commentVector(
+    unifiedStrokeIcon(
         name = "DislikeOutline",
-        path = "M15,3H6c-0.83,0 -1.54,0.5 -1.84,1.22l-3.02,7.05c-0.09,0.23 -0.14,0.47 -0.14,0.73v2" +
-            "c0,1.1 0.9,2 2,2h6.31l-0.95,4.57 -0.03,0.32c0,0.41 0.17,0.79 0.44,1.06L9.83,23" +
-            "l6.58,-6.59c0.37,-0.36 0.59,-0.86 0.59,-1.41V5c0,-1.1 -0.9,-2 -2,-2zm0,12l-4.34,4.34L12,14H3v-2" +
-            "l3,-7h9v10zm4,-12h4v12h-4V3z",
+        paths = listOf(
+            "M16.6,13.7V4.1H19.2C20.25,4.1 20.9,4.75 20.9,5.8V12C20.9,13.05 20.25,13.7 19.2,13.7H16.6Z",
+            "M16.6,13.7L13.05,19.65C12.55,20.5 11.45,20.75 10.6,20.25C9.85,19.82 9.5,18.95 9.75,18.12" +
+                "L10.65,14.9H5.9C4.25,14.9 3.1,13.72 3.28,12.08L3.98,6.35" +
+                "C4.18,4.95 5.35,4.1 6.85,4.1H16.6",
+        ),
     )
 }
 
 internal val DislikeFilledIcon: ImageVector by lazy {
-    commentVector(
+    dualToneVector(
         name = "DislikeFilled",
-        path = "M15,3H6c-0.83,0 -1.54,0.5 -1.84,1.22l-3.02,7.05c-0.09,0.23 -0.14,0.47 -0.14,0.73v2" +
-            "c0,1.1 0.9,2 2,2h6.31l-0.95,4.57 -0.03,0.32c0,0.41 0.17,0.79 0.44,1.06L9.83,23" +
-            "l6.58,-6.59c0.37,-0.36 0.59,-0.86 0.59,-1.41V5c0,-1.1 -0.9,-2 -2,-2zm4,0v12h4V3h-4z",
+        layers = listOf(
+            VectorLayer(path = roundedRectPath(17.3f, 3.2f, 4.5f, 11.0f, 1.7f), alpha = SECONDARY_ALPHA),
+            VectorLayer(
+                path = "M15.7,13.9L12.45,20.15C11.95,21.1 10.75,21.38 9.85,20.82" +
+                    "C9.05,20.32 8.68,19.35 8.98,18.45L10.08,15.05H5.55" +
+                    "C3.58,15.05 2.15,13.58 2.42,11.62L3.18,6.05" +
+                    "C3.44,4.32 4.85,3.2 6.6,3.2H13.8C15.05,3.2 15.7,3.85 15.7,5.1V13.9Z",
+            ),
+        ),
     )
 }
 
@@ -408,3 +438,89 @@ private fun commentVector(name: String, path: String): ImageVector =
         pathData = addPathNodes(path),
         fill = SolidColor(Color.Black),
     ).build()
+
+/**
+ * 评论区单行昵称 + 等级/UP 徽章：
+ * 默认 13.5sp；当昵称在剩余宽度内放不下时自动微调字号至刚好完整显示（下限 10sp，避免过小），不换行。
+ */
+@Composable
+internal fun UserNameWithBadges(
+    userName: String,
+    level: Int,
+    isUp: Boolean,
+    nameColor: Color,
+    onClick: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val baseStyle = COUITheme.textStyles.body2.copy(
+        fontSize = 13.5.sp,
+        lineHeight = 18.sp,
+        fontWeight = FontWeight.Medium,
+    )
+    val badgesWidthPx = with(density) {
+        ((if (level > 0) 28.dp else 0.dp) + (if (isUp) 25.dp else 0.dp)).roundToPx()
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val maxTextWidthPx = (constraints.maxWidth - badgesWidthPx - 2).coerceAtLeast(0)
+        val fittedFontSp = remember(userName, baseStyle, maxTextWidthPx) {
+            if (maxTextWidthPx <= 0 || userName.isEmpty()) {
+                13.5f
+            } else {
+                val fitsAt = { sizeSp: Float ->
+                    !textMeasurer.measure(
+                        text = userName,
+                        style = baseStyle.copy(fontSize = sizeSp.sp),
+                        overflow = TextOverflow.Clip,
+                        softWrap = false,
+                        maxLines = 1,
+                        constraints = Constraints(maxWidth = maxTextWidthPx),
+                    ).hasVisualOverflow
+                }
+                val maxSp = 13.5f
+                val minSp = 10.0f
+                when {
+                    fitsAt(maxSp) -> maxSp
+                    !fitsAt(minSp) -> minSp
+                    else -> {
+                        var lo = minSp
+                        var hi = maxSp
+                        repeat(7) {
+                            val mid = (lo + hi) * 0.5f
+                            if (fitsAt(mid)) lo = mid else hi = mid
+                        }
+                        lo
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = userName,
+                modifier = Modifier.weight(1f, fill = false),
+                style = baseStyle.copy(fontSize = fittedFontSp.sp),
+                color = nameColor,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (level > 0) {
+                Spacer(Modifier.width(4.dp))
+                BiliLevelBadge(level = level)
+            }
+            if (isUp) {
+                Spacer(Modifier.width(4.dp))
+                BiliUpBadge()
+            }
+        }
+    }
+}

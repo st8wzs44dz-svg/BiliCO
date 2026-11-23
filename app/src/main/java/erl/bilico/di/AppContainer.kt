@@ -18,6 +18,7 @@ import erl.bilico.data.repository.ImRepository
 import erl.bilico.data.repository.HistoryRepository
 import erl.bilico.data.repository.InteractionRepository
 import erl.bilico.data.repository.LiveRepository
+import erl.bilico.data.repository.MemberProfileRepository
 import erl.bilico.data.repository.MessageRepository
 import erl.bilico.data.repository.PgcRepository
 import erl.bilico.data.repository.PublishedRecordRepository
@@ -32,6 +33,7 @@ import erl.bilico.data.repository.VideoRepository
 import erl.bilico.data.repository.WatchLaterRepository
 import erl.bilico.data.session.SessionRepository
 import erl.bilico.data.settings.SettingsRepository
+import erl.bilico.download.DownloadService
 import erl.bilico.feature.cast.DlnaCastController
 import erl.bilico.update.AppUpdateManager
 import kotlinx.coroutines.CoroutineScope
@@ -72,8 +74,6 @@ class AppContainer(context: Context) {
 
     val publishedRecords = PublishedRecordRepository(appContext, scope)
 
-    val downloads = DownloadRepository(appContext, client, scope)
-
     val tokenRefresh = TokenRefreshHelper(client.passportApi, session)
 
     val feed = FeedRepository(client.api, client.wbi, client.buvid, session, client.cookieStore, tokenRefresh, settings)
@@ -106,6 +106,8 @@ class AppContainer(context: Context) {
 
     val space = SpaceRepository(client.api, client.wbi, client.buvid)
 
+    val memberProfile = MemberProfileRepository(client.api, client.buvid, session)
+
     val favorites = FavoriteRepository(client.api, client.buvid, session)
 
     val watchLater = WatchLaterRepository(client.api, client.buvid, session)
@@ -120,7 +122,7 @@ class AppContainer(context: Context) {
 
     val interactions = InteractionRepository(client.api, client.buvid, session)
 
-    val messages = MessageRepository(client.api, client.buvid)
+    val messages = MessageRepository(client.api, client.buvid, session)
 
     val im = ImRepository(client.api, space, session)
 
@@ -133,6 +135,21 @@ class AppContainer(context: Context) {
     val reports = ReportRepository(client.api, client.buvid, client.cookieStore, session)
 
     val dlna = DlnaCastController(appContext, scope, client, video, pgc, settings)
+
+    val downloads = DownloadRepository(
+        context = appContext,
+        scope = scope,
+        client = client,
+        videoRepository = video,
+        pgcRepository = pgc,
+        danmakuRepository = danmaku,
+        subtitleRepository = subtitles,
+        settings = settings,
+    ).apply {
+        onActiveDownloadsChanged = { hasActive ->
+            DownloadService.syncState(appContext, hasActive)
+        }
+    }
 }
 
 val LocalAppContainer = staticCompositionLocalOf<AppContainer?> { null }

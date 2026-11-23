@@ -56,6 +56,7 @@ import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.expandOrigin
 import erl.bilico.ui.pageContainerColor
 import erl.bilico.ui.rememberExpandOrigin
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.FullPagePullToRefresh
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.fullPagePullToRefreshColors
@@ -77,6 +78,7 @@ fun RankingSection(
     refreshTick: Int,
     primaryTapTick: Int = 0,
 ) {
+    BindScrollToTop(listState, enabled = active)
     val viewModel: RankingViewModel = viewModel { RankingViewModel(container.ranking) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val blocks by container.blocks.snapshot.collectAsStateWithLifecycle()

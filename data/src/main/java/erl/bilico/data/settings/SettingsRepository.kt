@@ -1,16 +1,66 @@
 package erl.bilico.data.settings
 
 import android.content.Context
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.floatPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.datastore.preferences.core.stringPreferencesKey
 import erl.bilico.data.biliDataStore
 import erl.bilico.data.model.PlaybackEndMode
 import erl.bilico.data.model.SponsorCategory
 import erl.bilico.data.repository.CdnOption
+import erl.bilico.data.settings.SettingsKeys.DEFAULT_LONG_PRESS_SPEED
+import erl.bilico.data.settings.SettingsKeys.HISTORY_LIMIT
+import erl.bilico.data.settings.SettingsKeys.KEY_ACCEPT_PRERELEASE
+import erl.bilico.data.settings.SettingsKeys.KEY_ADJUSTABLE_LONG_PRESS_SPEED
+import erl.bilico.data.settings.SettingsKeys.KEY_ADVANCED_PLUS_ONE
+import erl.bilico.data.settings.SettingsKeys.KEY_AUTO_CHECK_UPDATE
+import erl.bilico.data.settings.SettingsKeys.KEY_AUTO_PIP
+import erl.bilico.data.settings.SettingsKeys.KEY_AUTO_PLAY_NEXT
+import erl.bilico.data.settings.SettingsKeys.KEY_AUTO_ROTATE_MODE
+import erl.bilico.data.settings.SettingsKeys.KEY_BACKGROUND_PLAY
+import erl.bilico.data.settings.SettingsKeys.KEY_CDN
+import erl.bilico.data.settings.SettingsKeys.KEY_DANMAKU_AREA
+import erl.bilico.data.settings.SettingsKeys.KEY_DANMAKU_ENABLED
+import erl.bilico.data.settings.SettingsKeys.KEY_DANMAKU_FONT
+import erl.bilico.data.settings.SettingsKeys.KEY_DANMAKU_OPACITY
+import erl.bilico.data.settings.SettingsKeys.KEY_DARK_MODE
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_ALLOW_BOTTOM
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_ALLOW_COLORFUL
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_ALLOW_SCROLL
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_ALLOW_SPECIAL
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_ALLOW_TOP
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_CAP_60FPS
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_LINE_HEIGHT
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_MASSIVE
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_MERGE_DUP
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_SPEED
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_STROKE
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_WEIGHT
+import erl.bilico.data.settings.SettingsKeys.KEY_DM_WEIGHT_FILTER
+import erl.bilico.data.settings.SettingsKeys.KEY_DECODER_MODE
+import erl.bilico.data.settings.SettingsKeys.KEY_FEED_SOURCE
+import erl.bilico.data.settings.SettingsKeys.KEY_FS_GESTURE_HINT
+import erl.bilico.data.settings.SettingsKeys.KEY_GESTURE_HAPTIC
+import erl.bilico.data.settings.SettingsKeys.KEY_GESTURE_VOL_BRIGHT
+import erl.bilico.data.settings.SettingsKeys.KEY_HTTP_DNS_ENABLED
+import erl.bilico.data.settings.SettingsKeys.KEY_IN_APP_BACKGROUND_PLAY
+import erl.bilico.data.settings.SettingsKeys.KEY_IN_APP_UPDATE
+import erl.bilico.data.settings.SettingsKeys.KEY_LOCKED_SPEED
+import erl.bilico.data.settings.SettingsKeys.KEY_LONG_PRESS_SPEED
+import erl.bilico.data.settings.SettingsKeys.KEY_PLAYBACK_END_MODE
+import erl.bilico.data.settings.SettingsKeys.KEY_PLAYER_CONIC_LIGHT
+import erl.bilico.data.settings.SettingsKeys.KEY_PREDICTIVE_BACK_FOLLOW
+import erl.bilico.data.settings.SettingsKeys.KEY_PREFER_SURFACE_VIEW
+import erl.bilico.data.settings.SettingsKeys.KEY_QUALITY
+import erl.bilico.data.settings.SettingsKeys.KEY_RETURN_BOUNCE
+import erl.bilico.data.settings.SettingsKeys.KEY_SEARCH_HISTORY
+import erl.bilico.data.settings.SettingsKeys.KEY_SHOW_VIDEO_DISLIKE
+import erl.bilico.data.settings.SettingsKeys.KEY_SKIPPED_UPDATE
+import erl.bilico.data.settings.SettingsKeys.KEY_SPEED_LOCKED
+import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_BLOCK_ENABLED
+import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_CATEGORIES
+import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_SKIP_MODE
+import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_USER_ID
+import erl.bilico.data.settings.SettingsKeys.KEY_SWIPE_DOWN_LOCK_LONG_PRESS_SPEED
+import erl.bilico.data.settings.SettingsKeys.KEY_UPDATE_CHECKED_AT
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +134,10 @@ class SettingsRepository(
     private val _gestureHaptic = MutableStateFlow(true)
     val gestureHaptic: StateFlow<Boolean> = _gestureHaptic.asStateFlow()
 
+    /** 是否在视频详情页操作栏显示「点踩」按钮。 */
+    private val _showVideoDislike = MutableStateFlow(true)
+    val showVideoDislike: StateFlow<Boolean> = _showVideoDislike.asStateFlow()
+
     /** 卡片展开后退回列表时是否保留轻压回弹效果。 */
     private val _returnBounce = MutableStateFlow(true)
     val returnBounce: StateFlow<Boolean> = _returnBounce.asStateFlow()
@@ -132,11 +186,18 @@ class SettingsRepository(
     private val _preferSurfaceView = MutableStateFlow(false)
     val preferSurfaceView: StateFlow<Boolean> = _preferSurfaceView.asStateFlow()
 
+    /** 播放器进度条是否启用 ColorOS 17 光感（锥形光效）。 */
+    private val _playerConicLight = MutableStateFlow(true)
+    val playerConicLight: StateFlow<Boolean> = _playerConicLight.asStateFlow()
+
     /** 播放器顶栏的显示配置，全屏与竖屏各一份。 */
     val playerTopBar = PlayerTopBarPreferences(context, scope)
 
     /** 信息流外观（封面比例等）。 */
     val feed = FeedPreferences(context, scope)
+
+    /** 自动连播下一条推荐视频时的弹窗与倒计时设置。 */
+    val autoNext = AutoNextPreferences(context, scope)
 
     /** 空降助手（SponsorBlock）总开关与跳过模式：0 自动跳过，1 手动跳过，2 仅进度条标记。 */
     private val _sponsorBlockEnabled = MutableStateFlow(true)
@@ -225,8 +286,10 @@ class SettingsRepository(
             _httpDnsEnabled.value = prefs[KEY_HTTP_DNS_ENABLED] ?: true
             _decoderMode.value = (prefs[KEY_DECODER_MODE] ?: 0).coerceIn(0, 2)
             _preferSurfaceView.value = prefs[KEY_PREFER_SURFACE_VIEW] ?: false
+            _playerConicLight.value = prefs[KEY_PLAYER_CONIC_LIGHT] ?: true
             playerTopBar.restore()
             feed.restore()
+            autoNext.restore()
             _sponsorBlockEnabled.value = prefs[KEY_SPONSOR_BLOCK_ENABLED] ?: true
             _sponsorSkipMode.value = (prefs[KEY_SPONSOR_SKIP_MODE] ?: 0).coerceIn(0, 2)
             _sponsorCategories.value = prefs[KEY_SPONSOR_CATEGORIES]
@@ -240,6 +303,7 @@ class SettingsRepository(
             _inAppUpdate.value = prefs[KEY_IN_APP_UPDATE] ?: true
             _updateCheckedAt.value = prefs[KEY_UPDATE_CHECKED_AT] ?: 0L
             _skippedUpdateVersion.value = prefs[KEY_SKIPPED_UPDATE] ?: ""
+            _showVideoDislike.value = prefs[KEY_SHOW_VIDEO_DISLIKE] ?: true
             _loaded.value = true
         }
     }
@@ -265,6 +329,11 @@ class SettingsRepository(
     fun setFullscreenGestureHint(enabled: Boolean) {
         _fullscreenGestureHint.value = enabled
         scope.launch { context.biliDataStore.edit { it[KEY_FS_GESTURE_HINT] = enabled } }
+    }
+
+    fun setPlayerConicLight(enabled: Boolean) {
+        _playerConicLight.value = enabled
+        scope.launch { context.biliDataStore.edit { it[KEY_PLAYER_CONIC_LIGHT] = enabled } }
     }
 
     fun setSponsorBlockEnabled(enabled: Boolean) {
@@ -333,6 +402,11 @@ class SettingsRepository(
     fun setGestureHaptic(enabled: Boolean) {
         _gestureHaptic.value = enabled
         scope.launch { context.biliDataStore.edit { it[KEY_GESTURE_HAPTIC] = enabled } }
+    }
+
+    fun setShowVideoDislike(show: Boolean) {
+        _showVideoDislike.value = show
+        scope.launch { context.biliDataStore.edit { it[KEY_SHOW_VIDEO_DISLIKE] = show } }
     }
 
     fun setReturnBounce(enabled: Boolean) {
@@ -601,61 +675,5 @@ class SettingsRepository(
     private fun persistHistory() {
         val encoded = _searchHistory.value.joinToString("\u0001")
         scope.launch { context.biliDataStore.edit { it[KEY_SEARCH_HISTORY] = encoded } }
-    }
-
-    private companion object {
-        const val HISTORY_LIMIT = 12
-        val KEY_DARK_MODE = intPreferencesKey("dark_mode")
-        val KEY_QUALITY = intPreferencesKey("default_quality")
-        val KEY_CDN = stringPreferencesKey("playback_cdn")
-        val KEY_FEED_SOURCE = intPreferencesKey("feed_source")
-        val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
-        val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
-        val KEY_ADVANCED_PLUS_ONE = booleanPreferencesKey("danmaku_advanced_plus_one")
-        val KEY_DANMAKU_OPACITY = intPreferencesKey("danmaku_opacity")
-        val KEY_DANMAKU_FONT = intPreferencesKey("danmaku_font_scale")
-        val KEY_DANMAKU_AREA = intPreferencesKey("danmaku_area")
-        val KEY_DM_ALLOW_SCROLL = booleanPreferencesKey("danmaku_allow_scroll")
-        val KEY_DM_ALLOW_TOP = booleanPreferencesKey("danmaku_allow_top")
-        val KEY_DM_ALLOW_BOTTOM = booleanPreferencesKey("danmaku_allow_bottom")
-        val KEY_DM_ALLOW_COLORFUL = booleanPreferencesKey("danmaku_allow_colorful")
-        val KEY_DM_ALLOW_SPECIAL = booleanPreferencesKey("danmaku_allow_special")
-        val KEY_DM_MERGE_DUP = booleanPreferencesKey("danmaku_merge_duplicates")
-        val KEY_DM_MASSIVE = booleanPreferencesKey("danmaku_massive_mode")
-        val KEY_DM_SPEED = intPreferencesKey("danmaku_speed")
-        val KEY_DM_STROKE = intPreferencesKey("danmaku_stroke_width")
-        val KEY_DM_WEIGHT = intPreferencesKey("danmaku_font_weight")
-        val KEY_DM_LINE_HEIGHT = intPreferencesKey("danmaku_line_height")
-        val KEY_DM_WEIGHT_FILTER = intPreferencesKey("danmaku_weight_filter")
-        val KEY_DM_CAP_60FPS = booleanPreferencesKey("danmaku_cap_60fps")
-        val KEY_IN_APP_BACKGROUND_PLAY = booleanPreferencesKey("in_app_background_play")
-        val KEY_BACKGROUND_PLAY = booleanPreferencesKey("background_play")
-        val KEY_AUTO_PIP = booleanPreferencesKey("auto_pip")
-        val KEY_AUTO_PLAY_NEXT = booleanPreferencesKey("auto_play_next")
-        val KEY_PLAYBACK_END_MODE = intPreferencesKey("playback_end_mode")
-        val KEY_GESTURE_HAPTIC = booleanPreferencesKey("gesture_haptic")
-        val KEY_RETURN_BOUNCE = booleanPreferencesKey("return_bounce")
-        val KEY_PREDICTIVE_BACK_FOLLOW = booleanPreferencesKey("predictive_back_follow")
-        val KEY_AUTO_ROTATE_MODE = intPreferencesKey("auto_rotate_mode")
-        val KEY_LONG_PRESS_SPEED = intPreferencesKey("long_press_speed")
-        val KEY_ADJUSTABLE_LONG_PRESS_SPEED = booleanPreferencesKey("adjustable_long_press_speed")
-        val KEY_SWIPE_DOWN_LOCK_LONG_PRESS_SPEED = booleanPreferencesKey("swipe_down_lock_long_press_speed")
-        val KEY_SPEED_LOCKED = booleanPreferencesKey("playback_speed_locked")
-        val KEY_LOCKED_SPEED = floatPreferencesKey("playback_locked_speed")
-        const val DEFAULT_LONG_PRESS_SPEED = 200
-        val KEY_GESTURE_VOL_BRIGHT = booleanPreferencesKey("gesture_vol_bright")
-        val KEY_FS_GESTURE_HINT = booleanPreferencesKey("fullscreen_gesture_hint")
-        val KEY_HTTP_DNS_ENABLED = booleanPreferencesKey("http_dns_enabled")
-        val KEY_DECODER_MODE = intPreferencesKey("video_decoder_mode")
-        val KEY_PREFER_SURFACE_VIEW = booleanPreferencesKey("prefer_surface_view")
-        val KEY_SPONSOR_BLOCK_ENABLED = booleanPreferencesKey("sponsor_block_enabled")
-        val KEY_SPONSOR_SKIP_MODE = intPreferencesKey("sponsor_skip_mode")
-        val KEY_SPONSOR_CATEGORIES = stringPreferencesKey("sponsor_categories")
-        val KEY_SPONSOR_USER_ID = stringPreferencesKey("sponsor_block_user_id")
-        val KEY_AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
-        val KEY_ACCEPT_PRERELEASE = booleanPreferencesKey("accept_prerelease")
-        val KEY_IN_APP_UPDATE = booleanPreferencesKey("in_app_update")
-        val KEY_UPDATE_CHECKED_AT = longPreferencesKey("update_checked_at")
-        val KEY_SKIPPED_UPDATE = stringPreferencesKey("skipped_update_version")
     }
 }

@@ -19,10 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.InlineTextContent
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
-import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,9 +43,6 @@ import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -59,6 +55,7 @@ import erl.bilico.data.model.DynamicImage
 import erl.bilico.data.repository.CommentVisibilityStatus
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.LocalAppContainer
+import erl.bilico.ui.components.CouiMenuItem
 import erl.bilico.ui.components.CouiPopupMenu
 import erl.bilico.ui.components.CoverImage
 import erl.bilico.ui.components.LoadingImage
@@ -79,7 +76,7 @@ import kotlinx.coroutines.launch
 private const val FOLDED_COMMENT_LINES = 8
 
 private val LocationPrefix = Regex("^IP\\s*属地\\s*[:：]\\s*", RegexOption.IGNORE_CASE)
-private val CommentAvatarGap = 12.dp
+private val CommentAvatarGap = 10.dp
 private val FlatCommentAvatarGap = 8.dp
 private val FlatCommentNameLineHeight = 17.sp
 private val FlatCommentMetaLineHeight = 12.sp
@@ -93,7 +90,7 @@ internal fun Density.flatCommentAvatarSize(): Dp = (
         FlatCommentMetaLineHeight.toDp().roundToPx()
     ).toDp()
 
-/** 视频主评论使用平铺样式，回复详情和其他入口共用原有评论内容。 */
+/** 视频主评论使用平铺样式，回复详情和其他入口共用卡片评论布局。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun BiliCommentItem(
@@ -121,7 +118,7 @@ internal fun BiliCommentItem(
     val avatarDp = when {
         flat -> density.flatCommentAvatarSize()
         isSubReply -> 32.dp
-        else -> 38.dp
+        else -> 36.dp
     }
     val avatarGap = if (flat) FlatCommentAvatarGap else CommentAvatarGap
     val avatarPx = with(density) { avatarDp.roundToPx() }
@@ -299,7 +296,6 @@ internal fun BiliCommentItem(
                         isUp = comment.isUp,
                         nameColor = nameColor,
                         onClick = openUser,
-                        flat = flat,
                     )
                     val metaText = remember(comment.timeSec, comment.location, flat) {
                         val datePart = Formatters.formatCommentDate(comment.timeSec)
@@ -322,24 +318,25 @@ internal fun BiliCommentItem(
                                 lineHeight = if (flat) FlatCommentMetaLineHeight else 15.sp,
                             ),
                             color = metaColor,
-                            maxLines = if (flat) 1 else Int.MAX_VALUE,
-                            overflow = if (flat) TextOverflow.Ellipsis else TextOverflow.Clip,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
 
                 if (!flat) {
                     comment.sailing?.let { sailing ->
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         CommentSailingBadge(sailing = sailing, isDark = isDark)
                     }
-                }
-                if (menuItems.isNotEmpty()) {
+                } else if (menuItems.isNotEmpty()) {
                     CommentMoreButton(
                         menuItems = menuItems,
-                        modifier = Modifier.padding(start = 4.dp)
-                            .then(if (flat) Modifier.align(Alignment.Top) else Modifier),
-                        horizontal = flat,
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .align(Alignment.Top),
+                        horizontal = true,
                     )
                 }
             }
@@ -476,6 +473,7 @@ internal fun BiliCommentItem(
                 disliked = comment.disliked,
                 likeCount = comment.like,
                 metaColor = metaColor,
+                menuItems = menuItems,
                 onReply = onReply,
                 onDislike = onDislike,
                 onLike = onLike,
@@ -662,10 +660,21 @@ private fun CommentPicturesGrid(
         isSubReply -> 74.dp
         else -> 86.dp
     }
+    val gapDp = 6.dp
+    val maxGridWidth = cellDp * 3 + gapDp * 2
     val cellPx = remember(density, cellDp) { with(density) { (cellDp * 1.5f).roundToPx() } }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // 固定 86dp 在窄屏评论栏内会超过正文宽度，按最大网格宽度封顶并在容器更窄时三列等分缩窄。
+    Column(
+        modifier = Modifier
+            .widthIn(max = maxGridWidth)
+            .fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(gapDp),
+    ) {
         pictures.take(9).chunked(3).forEachIndexed { rowIdx, rowPics ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(gapDp),
+            ) {
                 rowPics.forEachIndexed { colIdx, pic ->
                     val index = rowIdx * 3 + colIdx
                     val url = remember(pic.url, cellPx) {
@@ -679,7 +688,8 @@ private fun CommentPicturesGrid(
                     }
                     Box(
                         modifier = Modifier
-                            .size(cellDp)
+                            .weight(1f)
+                            .aspectRatio(1f)
                             .imageOrigin(url = keyUrl, cornerRadius = 6.dp, aspect = trueAspect, model = url)
                             .clip(SquircleShape(6.dp))
                             .clickable { onOpenImage(pictures, index) },
@@ -692,70 +702,12 @@ private fun CommentPicturesGrid(
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun UserNameWithBadges(
-    userName: String,
-    level: Int,
-    isUp: Boolean,
-    nameColor: Color,
-    onClick: () -> Unit,
-    flat: Boolean,
-) {
-    val density = LocalDensity.current
-    val lvWidthSp = with(density) { 24.dp.toSp() }
-    val lvHeightSp = with(density) { 12.dp.toSp() }
-    val upWidthSp = with(density) { 21.dp.toSp() }
-
-    val (annotated, inlineContent) = remember(userName, level, isUp, lvWidthSp, lvHeightSp, upWidthSp) {
-        val inline = LinkedHashMap<String, InlineTextContent>()
-        val builder = AnnotatedString.Builder()
-        builder.append(userName)
-        if (level > 0) {
-            builder.append(" ")
-            builder.appendInlineContent("lv_badge", "LV$level")
-            inline["lv_badge"] = InlineTextContent(
-                Placeholder(lvWidthSp, lvHeightSp, PlaceholderVerticalAlign.Center),
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    BiliLevelBadge(level = level)
+                repeat(3 - rowPics.size) {
+                    Spacer(Modifier.weight(1f))
                 }
             }
         }
-        if (isUp) {
-            builder.append(" ")
-            builder.appendInlineContent("up_badge", "UP")
-            inline["up_badge"] = InlineTextContent(
-                Placeholder(upWidthSp, lvHeightSp, PlaceholderVerticalAlign.Center),
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    BiliUpBadge()
-                }
-            }
-        }
-        builder.toAnnotatedString() to inline
     }
-
-    Text(
-        text = annotated,
-        modifier = Modifier
-            .then(if (flat) Modifier.height(with(density) { FlatCommentNameLineHeight.toDp() }) else Modifier)
-            .clickable(onClick = onClick),
-        style = COUITheme.textStyles.body2.copy(
-            fontSize = 13.5.sp,
-            lineHeight = if (flat) FlatCommentNameLineHeight else 18.sp,
-            fontWeight = FontWeight.Medium,
-        ),
-        color = nameColor,
-        softWrap = !flat,
-        maxLines = if (flat) 1 else Int.MAX_VALUE,
-        overflow = if (flat) TextOverflow.Ellipsis else TextOverflow.Visible,
-        inlineContent = inlineContent,
-    )
 }
 
 @Composable
@@ -764,6 +716,7 @@ private fun CommentActionBar(
     disliked: Boolean,
     likeCount: Int,
     metaColor: Color,
+    menuItems: List<CouiMenuItem>,
     onReply: () -> Unit,
     onDislike: () -> Unit,
     onLike: () -> Unit,
@@ -815,6 +768,15 @@ private fun CommentActionBar(
             CommentIconAction(dislikeIcon, dislikeLabel, dislikeColor, onDislike, horizontalPadding = 6.dp)
             Spacer(Modifier.width(14.dp))
             CommentIconAction(likeIcon, likeLabel, likeColor, onLike, formattedCount, liked)
+            if (menuItems.isNotEmpty()) {
+                Spacer(Modifier.width(10.dp))
+                CommentMoreButton(
+                    menuItems = menuItems,
+                    tint = metaColor,
+                    boxSize = 22.dp,
+                    iconSize = 15.dp,
+                )
+            }
         }
     }
 }

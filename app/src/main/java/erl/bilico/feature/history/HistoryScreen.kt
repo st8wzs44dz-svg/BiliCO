@@ -56,6 +56,7 @@ import erl.bilico.ui.components.ConfirmDialog
 import erl.bilico.ui.components.CouiMenuItem
 import erl.bilico.ui.components.CouiPopupMenu
 import erl.bilico.ui.components.CoverImage
+import erl.bilico.ui.components.DanmakuStatIcon
 import erl.bilico.ui.components.EmptyState
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.LoadingState
@@ -65,6 +66,7 @@ import erl.bilico.ui.components.SecondaryPagerPage
 import erl.bilico.ui.components.StatLabel
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.pageContainerColor
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CardDefaults
 import io.github.suqi8.coui.kmp.basic.HighlightedIconButton
@@ -74,7 +76,6 @@ import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.basic.TopAppBarSearchBar
 import io.github.suqi8.coui.kmp.basic.couiTopAppBarActionItem
 import io.github.suqi8.coui.kmp.icon.COUIIcons
-import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Play
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
@@ -259,6 +260,7 @@ fun HistoryScreen(
         HistoryTabList(
             loggedIn = loggedIn != null,
             tab = tab,
+            active = pageIndex == pagerState.currentPage,
             tabState = tabState,
             items = filteredItems,
             isFiltering = state.searchQuery.isNotBlank(),
@@ -306,6 +308,7 @@ fun HistoryScreen(
 private fun HistoryTabList(
     loggedIn: Boolean,
     tab: HistoryTab,
+    active: Boolean,
     tabState: HistoryTabState,
     items: List<HistoryItem>,
     isFiltering: Boolean,
@@ -320,6 +323,7 @@ private fun HistoryTabList(
     onOpenItem: (HistoryItem) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    BindScrollToTop(listState, enabled = active)
 
     LaunchedEffect(listState, items.size, isFiltering) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
@@ -522,7 +526,7 @@ private fun HistoryRow(
                         StatLabel(COUIIcons.Play, Formatters.formatStat(stat.view))
                         if (stat.danmaku > 0L) {
                             Spacer(Modifier.width(10.dp))
-                            StatLabel(COUIIcons.Messages, Formatters.formatStat(stat.danmaku))
+                            StatLabel(DanmakuStatIcon, Formatters.formatStat(stat.danmaku))
                         }
                     }
                 }

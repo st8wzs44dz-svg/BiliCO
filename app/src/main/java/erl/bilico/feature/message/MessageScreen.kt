@@ -39,6 +39,7 @@ import erl.bilico.data.model.MessageKind
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.comment.LikeOutlineIcon
 import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.LocalRouteIsTop
 import erl.bilico.ui.NavState
 import erl.bilico.ui.PinnedBarDensity
 import erl.bilico.ui.Route
@@ -54,6 +55,7 @@ import erl.bilico.ui.components.MailOutlineIcon
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.layerBackdropIf
 import erl.bilico.ui.pageContainerColor
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.ChipTabData
 import io.github.suqi8.coui.kmp.basic.ChipTabDefaults
 import io.github.suqi8.coui.kmp.basic.ChipTabGroup
@@ -63,6 +65,7 @@ import io.github.suqi8.coui.kmp.basic.LocalPlatformAppBarMaterialEnabled
 import io.github.suqi8.coui.kmp.basic.SearchResultContainer
 import io.github.suqi8.coui.kmp.basic.SearchResultContainerDefaults
 import io.github.suqi8.coui.kmp.basic.SearchResultsRiseTrigger
+import io.github.suqi8.coui.kmp.basic.ScrollToTopPage
 import io.github.suqi8.coui.kmp.basic.SmallTopAppBar
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.TextButton
@@ -87,10 +90,21 @@ fun MessageScreen(
         MessageViewModel(container.messages, container.im, container.session)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val pagerState = rememberPagerState { MESSAGE_TABS.size }
+    val initialPageIndex = remember {
+        MESSAGE_TABS.indexOfFirst { it.kind == viewModel.initialKind }.coerceAtLeast(0)
+    }
+    val pagerState = rememberPagerState(initialPage = initialPageIndex) { MESSAGE_TABS.size }
     val scope = rememberCoroutineScope()
     val pageColor = pageContainerColor()
     val layerBackdrop = rememberLayerBackdrop()
+    val isTop = LocalRouteIsTop.current
+    var wasOnTop by remember { mutableStateOf(isTop) }
+    LaunchedEffect(isTop) {
+        if (isTop && !wasOnTop) {
+            viewModel.refreshOnReturn()
+        }
+        wasOnTop = isTop
+    }
 
     var menuExpanded by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -102,8 +116,16 @@ fun MessageScreen(
         }
     }
 
-    val chipTabItems = remember(MESSAGE_TABS) {
-        MESSAGE_TABS.map { tab -> ChipTabData(label = tab.label, icon = tab.iconVector) }
+    val chipTabItems = remember(state.unread) {
+        MESSAGE_TABS.map { tab ->
+            val unreadCount = state.unread.countOf(tab.kind)
+            ChipTabData(
+                label = tab.label,
+                icon = tab.iconVector,
+                showRedDot = unreadCount > 0,
+                count = unreadCount.takeIf { it > 0 },
+            )
+        }
     }
 
     // 滑停一页就补拉这一类；点标签走的是同一个入口。
@@ -133,25 +155,27 @@ fun MessageScreen(
                 .background(pageColor),
             beyondViewportPageCount = 1,
         ) { index ->
-            val kind = MESSAGE_TABS[index].kind
-            if (kind == MessageKind.SESSION) {
-                SessionList(
-                    state = state,
-                    loggedIn = account != null,
-                    contentTop = headerHeight + 8.dp,
-                    viewModel = viewModel,
-                    nav = nav,
-                )
-            } else {
-                MessageList(
-                    kind = kind,
-                    state = state.of(kind),
-                    loggedIn = account != null,
-                    contentTop = headerHeight + 8.dp,
-                    viewModel = viewModel,
-                    nav = nav,
-                    onNotice = { notice = it },
-                )
+            ScrollToTopPage(active = index == pagerState.settledPage) {
+                val kind = MESSAGE_TABS[index].kind
+                if (kind == MessageKind.SESSION) {
+                    SessionList(
+                        state = state,
+                        loggedIn = account != null,
+                        contentTop = headerHeight + 8.dp,
+                        viewModel = viewModel,
+                        nav = nav,
+                    )
+                } else {
+                    MessageList(
+                        kind = kind,
+                        state = state.of(kind),
+                        loggedIn = account != null,
+                        contentTop = headerHeight + 8.dp,
+                        viewModel = viewModel,
+                        nav = nav,
+                        onNotice = { notice = it },
+                    )
+                }
             }
         }
 
@@ -265,6 +289,7 @@ private fun MessageList(
     onNotice: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
+    BindScrollToTop(listState)
     val itemCount by rememberUpdatedState(state.items.size)
     val transitionSpec = SearchResultContainerDefaults.transitionSpec(
         riseTrigger = SearchResultsRiseTrigger.OnlyAfterLoading,
@@ -333,6 +358,7 @@ private fun MessageList(
                 val canOpen = entry.target != null || entry.senderMid > 0L
                 MessageRow(
                     entry = entry,
+                    highlighted = entry.key in state.highlightedKeys,
                     onClick = if (canOpen) {
                         {
                             viewModel.openEntry(

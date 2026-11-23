@@ -1,6 +1,8 @@
 package erl.bilico.ui
 
 import android.os.SystemClock
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -47,28 +50,39 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import erl.bilico.data.util.Formatters
+import erl.bilico.di.LocalAppContainer
+import erl.bilico.feature.search.FeedTitleRow
+import erl.bilico.feature.search.SearchUiState
+import erl.bilico.ui.components.CouiMenuItem
+import erl.bilico.ui.components.CouiPopupMenu
 import erl.bilico.ui.components.NavDynamicFilledIcon
 import erl.bilico.ui.components.NavDynamicOutlineIcon
 import erl.bilico.ui.components.NavHomeFilledIcon
 import erl.bilico.ui.components.NavHomeOutlineIcon
 import erl.bilico.ui.components.NavMeFilledIcon
 import erl.bilico.ui.components.NavMeOutlineIcon
+import io.github.suqi8.coui.kmp.basic.Badge
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBar
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarItem
 import io.github.suqi8.coui.kmp.basic.HighlightedIconButton
 import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.PopupPositionProvider
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.TopAppBarDefaults
 import io.github.suqi8.coui.kmp.basic.couiTopAppBarActionItem
+import io.github.suqi8.coui.kmp.basic.scrollToTopOnTap
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.basic.Search
 import io.github.suqi8.coui.kmp.icon.extended.Add
 import io.github.suqi8.coui.kmp.icon.extended.Contacts
+import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.Email
+import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Settings
 import io.github.suqi8.coui.kmp.theme.COUITheme
 
@@ -109,8 +123,47 @@ internal fun FeedAvatar(
     }
 }
 
+/** 顶栏右上角消息按钮：聚合私信与通知未读总数显示 COUI 红点角标。 */
 @Composable
-internal fun RowScope.TabActions(tab: Int, nav: NavState, onSearch: () -> Unit) {
+internal fun MessagesActionButton(
+    nav: NavState,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val unreadState = LocalAppContainer.current?.messages?.unread?.collectAsStateWithLifecycle()
+    val unreadCount = unreadState?.value?.total ?: 0
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        HighlightedIconButton(
+            onClick = { nav.push(Route.Messages) },
+            enabled = enabled,
+            modifier = Modifier
+                .couiTopAppBarActionItem()
+                .testTag("top_messages"),
+        ) {
+            Icon(COUIIcons.Email, "消息", Modifier.size(24.dp))
+        }
+        if (unreadCount > 0) {
+            Badge(
+                count = unreadCount,
+                stroke = true,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 2.dp, y = (-2).dp),
+            )
+        }
+    }
+}
+
+@Composable
+internal fun RowScope.TabActions(
+    tab: Int,
+    nav: NavState,
+    onSearch: () -> Unit,
+    onEditProfile: () -> Unit = {},
+) {
     when (tab) {
         0 -> {
             HighlightedIconButton(
@@ -121,23 +174,57 @@ internal fun RowScope.TabActions(tab: Int, nav: NavState, onSearch: () -> Unit) 
             ) {
                 Icon(COUIIcons.Basic.Search, "搜索", Modifier.size(24.dp))
             }
-            HighlightedIconButton(
-                onClick = { nav.push(Route.Messages) },
-                modifier = Modifier
-                    .couiTopAppBarActionItem()
-                    .testTag("top_messages"),
-            ) {
-                Icon(COUIIcons.Email, "消息", Modifier.size(24.dp))
-            }
+            MessagesActionButton(nav = nav)
         }
 
-        ME_TAB_INDEX -> HighlightedIconButton(
-            onClick = { nav.push(Route.Settings) },
-            modifier = Modifier
-                .couiTopAppBarActionItem()
-                .testTag("top_settings"),
-        ) {
-            Icon(COUIIcons.Settings, "设置", Modifier.size(24.dp))
+        ME_TAB_INDEX -> {
+            var meMenuExpanded by remember { mutableStateOf(false) }
+            val menuScheme = COUITheme.colorScheme
+            Box {
+                HighlightedIconButton(
+                    onClick = { meMenuExpanded = true },
+                    modifier = Modifier
+                        .couiTopAppBarActionItem()
+                        .testTag("top_me_menu"),
+                ) {
+                    Icon(COUIIcons.More, "更多", Modifier.size(24.dp))
+                }
+                CouiPopupMenu(
+                    show = meMenuExpanded,
+                    onDismiss = { meMenuExpanded = false },
+                    alignment = PopupPositionProvider.Align.End,
+                    items = listOf(
+                        CouiMenuItem(
+                            label = "编辑资料",
+                            icon = { iconModifier ->
+                                Box(iconModifier, contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = COUIIcons.Edit,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = menuScheme.onSurfaceContainer,
+                                    )
+                                }
+                            },
+                            onClick = onEditProfile,
+                        ),
+                        CouiMenuItem(
+                            label = "设置",
+                            icon = { iconModifier ->
+                                Box(iconModifier, contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = COUIIcons.Settings,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = menuScheme.onSurfaceContainer,
+                                    )
+                                }
+                            },
+                            onClick = { nav.push(Route.Settings) },
+                        ),
+                    ),
+                )
+            }
         }
     }
 }
@@ -368,6 +455,60 @@ internal fun FloatingBottomBar(
                     modifier = Modifier.testTag("bottom_tab_me"),
                 )
             }
+        }
+    }
+}
+
+@Composable
+internal fun MainTitleRow(
+    tab: Int,
+    nav: NavState,
+    collapsed: () -> Float,
+    avatarUrl: String?,
+    onAvatarClick: () -> Unit,
+    searchState: SearchUiState,
+    onQueryChange: (String) -> Unit,
+    searchExpanded: Boolean,
+    onSearchOpen: () -> Unit,
+    onSearchCancel: () -> Unit,
+    onSearchSubmit: (String) -> Unit,
+    showingResults: Boolean,
+    onTabChange: (Int) -> Unit,
+    onSortMenuOpen: () -> Unit,
+    onEditProfile: () -> Unit,
+    panelAlpha: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    Crossfade(
+        targetState = tab,
+        animationSpec = tween(MainTabFadeMillis),
+        modifier = modifier.scrollToTopOnTap(),
+        label = "mainTitleRow",
+    ) { page ->
+        if (page == 0) {
+            FeedTitleRow(
+                searchState = searchState,
+                onQueryChange = onQueryChange,
+                searchExpanded = searchExpanded,
+                onSearchOpen = onSearchOpen,
+                onSearchCancel = onSearchCancel,
+                onSearchSubmit = onSearchSubmit,
+                avatarUrl = avatarUrl,
+                onAvatarClick = onAvatarClick,
+                nav = nav,
+                collapsed = collapsed,
+                showingResults = showingResults,
+                onTabChange = onTabChange,
+                onSortMenuOpen = onSortMenuOpen,
+                panelAlpha = panelAlpha,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            PageTitleBar(
+                title = tabTitles.getOrElse(page) { "" },
+                collapsed = collapsed,
+                actions = { TabActions(page, nav, onSearch = {}, onEditProfile = onEditProfile) },
+            )
         }
     }
 }

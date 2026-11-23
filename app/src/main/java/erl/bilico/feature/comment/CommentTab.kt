@@ -23,6 +23,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
@@ -101,6 +102,7 @@ fun CommentTab(
     sortInToolbar: Boolean = false,
     panelColor: Color? = null,
 ) {
+    BindScrollToTop(listState)
     val viewModel = toolbarViewModel ?: rememberCommentViewModel(container, oid, type, targetRootId, targetReplyId)
     val headerItems = if (sortInToolbar) 0 else 1
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -196,9 +198,9 @@ fun CommentTab(
                     state = listState,
                     modifier = Modifier.fillMaxSize().scrollEndHaptic(),
                     contentPadding = PaddingValues(
-                        start = if (flat) 20.dp else 16.dp,
+                        start = if (flat) 20.dp else 12.dp,
                         top = topInset + if (sortInToolbar) 8.dp else topGap,
-                        end = if (flat) 20.dp else 16.dp,
+                        end = if (flat) 20.dp else 12.dp,
                         bottom = 88.dp + bottomInset,
                     ),
                 ) {
@@ -265,7 +267,7 @@ fun CommentTab(
                         } else {
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                                insideMargin = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                                insideMargin = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                                 onClick = { threadController.open(comment) },
                             ) { commentRow() }
                         }

@@ -2,6 +2,12 @@ package erl.bilico.feature.video
 
 import android.view.LayoutInflater
 import android.view.View
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -75,6 +81,7 @@ internal fun VideoPlayer(
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
+    bufferedMs: Long = 0L,
     isBuffering: Boolean,
     errorMessage: String?,
     qualityLabel: String?,
@@ -90,6 +97,7 @@ internal fun VideoPlayer(
     hapticEnabled: Boolean = true,
     volumeBrightnessEnabled: Boolean = true,
     fullscreenHintEnabled: Boolean = true,
+    conicLightEnabled: Boolean = true,
     qualities: List<QualityOption> = emptyList(),
     activeQuality: Int = 0,
     onSelectQuality: (Int) -> Unit = {},
@@ -117,6 +125,7 @@ internal fun VideoPlayer(
     onWatchLater: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
     onCast: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
     onReportVideo: (() -> Unit)? = null,
     playbackEndMode: PlaybackEndMode = PlaybackEndMode.AUTO_NEXT,
     onSelectPlaybackEndMode: ((PlaybackEndMode) -> Unit)? = null,
@@ -126,8 +135,6 @@ internal fun VideoPlayer(
     statusText: String? = null,
     audioOnly: Boolean = false,
     onToggleAudioOnly: (() -> Unit)? = null,
-    onCacheVideo: (() -> Unit)? = null,
-    onCacheAudio: (() -> Unit)? = null,
     onSelectLine: (() -> Unit)? = null,
     superChatCount: Int = 0,
     onSuperChatsClick: (() -> Unit)? = null,
@@ -138,6 +145,7 @@ internal fun VideoPlayer(
     onSubmitSponsor: (() -> Unit)? = null,
     onJumpSponsorSegment: ((SponsorSegment) -> Unit)? = null,
     sponsorOverlay: @Composable BoxScope.(bottomPad: Dp, startPad: Dp) -> Unit = { _, _ -> },
+    autoNextOverlay: @Composable BoxScope.(bottomPad: Dp, endPad: Dp) -> Unit = { _, _ -> },
     subtitleOverlay: @Composable (controlsVisible: Boolean) -> Unit = {},
     overlay: @Composable () -> Unit = {},
     danmakuComposer: (@Composable (onFocusChange: (Boolean) -> Unit) -> Unit)? = null,
@@ -156,8 +164,9 @@ internal fun VideoPlayer(
     var speedEndMargin by remember { mutableStateOf(120.dp) }
     var qualityEndMargin by remember { mutableStateOf(64.dp) }
     var subtitleEndMargin by remember { mutableStateOf(176.dp) }
-    // 正在输入弹幕：这时不能让控件条按 4.5 秒自动收，否则键盘还在、框先没了。
+    // 正在输入弹幕或拖动进度条：这时不能让控件条按 4.5 秒自动收。
     var composerFocused by remember { mutableStateOf(false) }
+    var scrubbingPositionMs by remember { mutableStateOf<Long?>(null) }
     var prevFullscreen by remember { mutableStateOf(fullscreen) }
 
     LaunchedEffect(fullscreen) {
@@ -176,10 +185,18 @@ internal fun VideoPlayer(
     }
     danmakuInteraction.selectedHit = selectedDanmaku
 
-    LaunchedEffect(controlsVisible, activeMenu, composerFocused, isPlaying, isBuffering, errorMessage) {
+    LaunchedEffect(
+        controlsVisible,
+        activeMenu,
+        composerFocused,
+        scrubbingPositionMs != null,
+        isPlaying,
+        isBuffering,
+        errorMessage,
+    ) {
         if (
             controlsVisible && activeMenu == PlayerPopupMenu.NONE && !composerFocused &&
-            isPlaying && !isBuffering && errorMessage == null
+            scrubbingPositionMs == null && isPlaying && !isBuffering && errorMessage == null
         ) {
             delay(4500)
             controlsVisible = false
@@ -348,7 +365,13 @@ internal fun VideoPlayer(
             )
         }
 
-        if (showChrome) {
+        AnimatedVisibility(
+            visible = showChrome,
+            enter = fadeIn(tween(200, easing = ColorOSMoveEase)) +
+                slideInVertically(tween(200, easing = ColorOSMoveEase)) { -it / 3 },
+            exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { -it / 3 },
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
             PlayerTopBar(
                 title = title,
                 items = topBarItems,
@@ -399,9 +422,8 @@ internal fun VideoPlayer(
                     },
                     portraitMoreMenu = {
                         PlayerMoreMenu(
-                            onShare = onShare, onCast = onCast, onSelectLine = onSelectLine,
+                            onShare = onShare, onCast = onCast, onDownload = onDownload, onSelectLine = onSelectLine,
                             audioOnly = audioOnly, onToggleAudioOnly = onToggleAudioOnly,
-                            onCacheVideo = onCacheVideo, onCacheAudio = onCacheAudio,
                             onReportVideo = onReportVideo, playbackEndMode = playbackEndMode,
                             onSelectPlaybackEndMode = onSelectPlaybackEndMode,
                             onSubmitSponsor = onSubmitSponsor, onShowStats = { statsVisible = true },
@@ -409,7 +431,6 @@ internal fun VideoPlayer(
                         )
                     },
                 ),
-                modifier = Modifier.align(Alignment.TopCenter),
             )
         }
 
@@ -422,15 +443,23 @@ internal fun VideoPlayer(
                 else -> 76.dp
             }
             sponsorOverlay(bottomChromePad, horizontalBarPad)
+            autoNextOverlay(bottomChromePad, horizontalBarPad)
         }
 
-        if (showChrome) {
+        AnimatedVisibility(
+            visible = showChrome,
+            enter = fadeIn(tween(200, easing = ColorOSMoveEase)) +
+                slideInVertically(tween(200, easing = ColorOSMoveEase)) { it / 3 },
+            exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { it / 3 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                // 全屏发弹幕时软键盘会把底栏顶走，整条跟着键盘抬起来。
+                .imePadding(),
+        ) {
             Column(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    // 全屏发弹幕时软键盘会把底栏顶走，整条跟着键盘抬起来。
-                    .imePadding()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
                     .padding(horizontal = horizontalBarPad, vertical = 6.dp),
             ) {
@@ -449,8 +478,15 @@ internal fun VideoPlayer(
                     PlayerProgress(
                         positionMs = positionMs,
                         durationMs = durationMs,
+                        bufferedMs = bufferedMs,
+                        isPlaying = isPlaying,
+                        isBuffering = isBuffering,
+                        conicLightEnabled = conicLightEnabled,
+                        holdToSpeedUp = longPressSpeed?.active == true,
+                        hapticEnabled = hapticEnabled,
                         sponsorSegments = sponsorSegments,
                         chapters = chapters,
+                        onScrubPositionChange = { scrubbingPositionMs = it },
                         onSeek = onSeek,
                     )
                 }
@@ -470,7 +506,7 @@ internal fun VideoPlayer(
                     } else {
                         Column(modifier = Modifier.padding(start = 2.dp)) {
                             Text(
-                                text = Formatters.formatDuration(positionMs / 1000),
+                                text = Formatters.formatDuration((scrubbingPositionMs ?: positionMs) / 1000),
                                 style = COUITheme.textStyles.footnote2,
                                 color = Color.White,
                                 lineHeight = 15.sp,
@@ -520,9 +556,8 @@ internal fun VideoPlayer(
                 menuBackdrop = menuBackdrop, horizontalBarPad = horizontalBarPad,
                 onHideControls = { controlsVisible = false }, playbackEndMode = playbackEndMode,
                 onSelectPlaybackEndMode = onSelectPlaybackEndMode,
-                onShare = onShare, onCast = onCast, onSelectLine = onSelectLine,
+                onShare = onShare, onCast = onCast, onDownload = onDownload, onSelectLine = onSelectLine,
                 audioOnly = audioOnly, onToggleAudioOnly = onToggleAudioOnly,
-                onCacheVideo = onCacheVideo, onCacheAudio = onCacheAudio,
                 onReportVideo = onReportVideo, onSubmitSponsor = onSubmitSponsor,
                 onShowStats = { activeMenu = PlayerPopupMenu.NONE; statsVisible = true },
                 onOpenTopBarSettings = openTopBarSettings,
@@ -539,42 +574,23 @@ internal fun VideoPlayer(
             DanmakuActionToolbar(activeHit, danmakuActions, { selectedDanmaku = null }, Modifier.fillMaxSize())
         }
 
-        if (statsVisible) {
-            PlayerStatsDialog(
-                player = player,
-                source = source,
-                inlineInStage = fullscreen,
-                onDismiss = { statsVisible = false },
-            )
-        }
-
-        if (sponsorAssistVisible) {
-            SponsorAssistDialog(
-                segments = sponsorSegments,
-                inlineInStage = fullscreen,
-                onJump = { segment ->
-                    sponsorAssistVisible = false
-                    onJumpSponsorSegment?.invoke(segment)
-                },
-                onSubmit = onSubmitSponsor?.let { submit ->
-                    {
-                        sponsorAssistVisible = false
-                        submit()
-                    }
-                },
-                onDismiss = { sponsorAssistVisible = false },
-            )
-        }
-
-        if (topBarSettingsVisible && onToggleTopBarItem != null) {
-            PlayerTopBarSettingsDialog(
-                fullscreen = topBarLayoutFullscreen,
-                portrait = topBarLayoutPortrait,
-                onToggle = onToggleTopBarItem,
-                onMove = onMoveTopBarItem ?: { _, _, _ -> },
-                onDismiss = { topBarSettingsVisible = false },
-                inlineInStage = fullscreen,
-            )
-        }
+        PlayerStageDialogs(
+            player = player,
+            source = source,
+            fullscreen = fullscreen,
+            statsVisible = statsVisible,
+            onDismissStats = { statsVisible = false },
+            sponsorAssistVisible = sponsorAssistVisible,
+            sponsorSegments = sponsorSegments,
+            onJumpSponsorSegment = onJumpSponsorSegment,
+            onSubmitSponsor = onSubmitSponsor,
+            onDismissSponsorAssist = { sponsorAssistVisible = false },
+            topBarSettingsVisible = topBarSettingsVisible,
+            topBarLayoutFullscreen = topBarLayoutFullscreen,
+            topBarLayoutPortrait = topBarLayoutPortrait,
+            onToggleTopBarItem = onToggleTopBarItem,
+            onMoveTopBarItem = onMoveTopBarItem,
+            onDismissTopBarSettings = { topBarSettingsVisible = false },
+        )
     }
 }

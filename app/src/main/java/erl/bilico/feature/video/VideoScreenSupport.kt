@@ -5,10 +5,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.OrientationEventListener
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -41,9 +44,11 @@ import androidx.media3.common.VideoSize
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import erl.bilico.data.model.FavoriteFolder
+import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.model.PlaybackEndMode
 import erl.bilico.data.model.PlaybackSource
 import erl.bilico.data.model.VideoChapter
+import erl.bilico.data.repository.BlockSnapshot
 import erl.bilico.data.settings.DanmakuSettings
 import erl.bilico.data.settings.SettingsRepository
 import erl.bilico.di.AppContainer
@@ -52,6 +57,8 @@ import erl.bilico.ui.NavState
 import erl.bilico.ui.Route
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlin.math.atan2
+import kotlin.math.roundToInt
 
 /**
  * 手动/手势切换全屏后的重力感应冷却保护时长 (毫秒)
@@ -76,7 +83,8 @@ internal fun Context.findActivity(): Activity? {
 }
 
 /**
- * 物理横竖屏方向，带 500ms 持续确认防抖、双门限迟滞与前后台生命周期启停：
+ * 物理横竖屏方向，基于 `Sensor.TYPE_GRAVITY`（无陀螺仪时回退低通滤波的加速度计），
+ * 带 300ms 持续确认防抖、双门限迟滞与前后台生命周期启停：
  * - `0`：竖屏
  * - `+1`：逆时针横屏（听筒在左，约 270°，对应自绘顺时针旋转 `+90°`）
  * - `-1`：顺时针反向横屏（听筒在右，约 90°，对应自绘逆时针旋转 `-90°`）
@@ -93,14 +101,44 @@ internal fun rememberDeviceOrientationSide(mode: Int): Int {
     var pendingTarget by remember { mutableStateOf<Int?>(null) }
 
     DisposableEffect(context, lifecycleOwner, mode) {
-        val listener = object : OrientationEventListener(context) {
-            override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) return
-                val delta = when (mode) {
-                    1 -> 30 // 迟钝防误触：60..120 / 240..300
-                    2 -> 38 // 标准：52..128 / 232..308
-                    else -> 45 // 灵敏：45..135 / 225..315
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            ?: return@DisposableEffect onDispose {}
+        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        val sensor = gravitySensor ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            ?: return@DisposableEffect onDispose {}
+        val useGravity = gravitySensor != null
+        val filtered = FloatArray(3)
+        var hasFiltered = false
+        var registered = false
+        val delta = when (mode) {
+            1 -> 30 // 迟钝防误触：60..120 / 240..300
+            2 -> 38 // 标准：52..128 / 232..308
+            else -> 45 // 灵敏：45..135 / 225..315
+        }
+
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                val values = if (useGravity) {
+                    event.values
+                } else {
+                    if (!hasFiltered) {
+                        for (i in 0..2) filtered[i] = event.values[i]
+                        hasFiltered = true
+                    } else {
+                        for (i in 0..2) filtered[i] += 0.2f * (event.values[i] - filtered[i])
+                    }
+                    filtered
                 }
+                val x = -values[0]
+                val y = -values[1]
+                val z = -values[2]
+                val xySq = x * x + y * y
+                if (xySq <= 0f || !(xySq * 14f >= z * z)) return
+
+                var orientation = 90 - Math.toDegrees(atan2(-y.toDouble(), x.toDouble())).roundToInt()
+                while (orientation >= 360) orientation -= 360
+                while (orientation < 0) orientation += 360
+
                 val inStandardLandscape = orientation in (270 - delta)..(270 + delta)
                 val inReverseLandscape = orientation in (90 - delta)..(90 + delta)
                 val inPortrait = orientation in 0..(90 - delta - 10) ||
@@ -127,36 +165,49 @@ internal fun rememberDeviceOrientationSide(mode: Int): Int {
                         pendingTarget = null
                     }
                     pendingRunnable = run
-                    handler.postDelayed(run, 500L)
+                    handler.postDelayed(run, 300L)
                 }
             }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+        fun register() {
+            if (registered) return
+            hasFiltered = false
+            registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI, handler)
+        }
+
+        fun unregister() {
+            if (!registered) return
+            registered = false
+            hasFiltered = false
+            sensorManager.unregisterListener(listener)
         }
 
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    if (listener.canDetectOrientation()) listener.enable()
-                }
+                Lifecycle.Event.ON_RESUME -> register()
                 Lifecycle.Event.ON_PAUSE -> {
                     pendingRunnable?.let { handler.removeCallbacks(it) }
                     pendingRunnable = null
                     pendingTarget = null
-                    listener.disable()
+                    unregister()
                 }
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
-            listener.canDetectOrientation()
-        ) {
-            listener.enable()
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            register()
         }
 
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             pendingRunnable?.let { handler.removeCallbacks(it) }
-            listener.disable()
+            pendingRunnable = null
+            pendingTarget = null
+            unregister()
         }
     }
     return side
@@ -252,7 +303,7 @@ internal fun VideoScreenDialogs(
     onSelectCoin: (Int) -> Unit,
     onDismissCoin: () -> Unit,
     favoriteFolders: List<FavoriteFolder>?,
-    onSelectFavorite: (Long) -> Unit,
+    onConfirmFavorite: (addMediaIds: List<Long>, delMediaIds: List<Long>, nowFavorited: Boolean) -> Unit,
     onDismissFavorite: () -> Unit,
     danmakuSettingsDialogVisible: Boolean = false,
     danmakuSettings: DanmakuSettings? = null,
@@ -265,6 +316,7 @@ internal fun VideoScreenDialogs(
     onDismissChapter: () -> Unit = {},
     sponsorSubmitDialog: (@Composable (inlineInStage: Boolean) -> Unit)? = null,
     castDialog: (@Composable (inlineInStage: Boolean) -> Unit)? = null,
+    downloadDialog: (@Composable (inlineInStage: Boolean) -> Unit)? = null,
     reportVideoDialog: (@Composable (inlineInStage: Boolean) -> Unit)? = null,
     inlineInStage: Boolean = false,
 ) {
@@ -289,7 +341,7 @@ internal fun VideoScreenDialogs(
         favoriteFolders?.let { folders ->
             FavoriteFolderDialog(
                 folders = folders,
-                onSelect = onSelectFavorite,
+                onConfirm = onConfirmFavorite,
                 onDismiss = onDismissFavorite,
             )
         }
@@ -307,6 +359,7 @@ internal fun VideoScreenDialogs(
 
     sponsorSubmitDialog?.invoke(inlineInStage)
     castDialog?.invoke(inlineInStage)
+    downloadDialog?.invoke(inlineInStage)
     reportVideoDialog?.invoke(inlineInStage)
 }
 
@@ -403,6 +456,7 @@ internal fun BindPlayerEvents(
     onError: (PlaybackException) -> Unit,
     onVideoAspectChanged: (Float) -> Unit = {},
     onPlaybackEnded: (() -> Unit)? = null,
+    onPlaybackLeaveEnded: (() -> Unit)? = null,
 ) {
     // 监听器只注册一次，回调要用最新值，否则换线时会读到首次组合时的空候选表。
     val currentOnPlaying by rememberUpdatedState(onPlayingChanged)
@@ -411,6 +465,7 @@ internal fun BindPlayerEvents(
     val currentOnError by rememberUpdatedState(onError)
     val currentOnAspect by rememberUpdatedState(onVideoAspectChanged)
     val currentOnEnded by rememberUpdatedState(onPlaybackEnded)
+    val currentOnLeaveEnded by rememberUpdatedState(onPlaybackLeaveEnded)
     val currentViewModel by rememberUpdatedState(viewModel)
 
     DisposableEffect(player) {
@@ -430,6 +485,7 @@ internal fun BindPlayerEvents(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 currentOnPlaying(playing)
+                if (playing) currentOnLeaveEnded?.invoke()
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -454,6 +510,7 @@ internal fun BindPlayerEvents(
                     val ended = currentOnEnded
                     if (ended != null) ended() else currentViewModel.playNextPart()
                 }
+                if (playbackState != Player.STATE_ENDED) currentOnLeaveEnded?.invoke()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -497,6 +554,9 @@ internal fun handleVideoPlaybackEnded(
     viewModel: VideoViewModel,
     nav: NavState,
     state: VideoUiState,
+    bvid: String = viewModel.currentBvid,
+    blocks: BlockSnapshot = BlockSnapshot(),
+    onPromptAutoNextRecommend: ((FeedVideo) -> Unit)? = null,
 ) {
     // 播完了就把这条的续播点清掉：留着的话再进来会直接在片尾。
     player.currentMediaItem?.mediaId?.let(PlaybackPositions::forget)
@@ -523,7 +583,12 @@ internal fun handleVideoPlaybackEnded(
                 if (queued != null) {
                     nav.replaceTop(Route.Video(queued.video.bvid, queued.startSec))
                 } else {
-                    state.related.firstOrNull()?.let { next ->
+                    val next = state.related.firstOrNull { candidate ->
+                        candidate.bvid != bvid && blocks.shouldShowFeedVideo(candidate, isRelated = true)
+                    } ?: return
+                    if (onPromptAutoNextRecommend != null) {
+                        onPromptAutoNextRecommend(next)
+                    } else {
                         nav.replaceTop(Route.Video(next.bvid, 0L))
                     }
                 }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import androidx.compose.runtime.LaunchedEffect
@@ -36,13 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -63,25 +57,28 @@ import erl.bilico.feature.comment.DislikeOutlineIcon
 import erl.bilico.feature.comment.LikeFilledIcon
 import erl.bilico.feature.comment.LikeOutlineIcon
 import erl.bilico.feature.feed.rememberWatchLaterAction
-import erl.bilico.ui.components.CouiMenuItem
-import erl.bilico.ui.components.CouiPopupMenu
+import erl.bilico.ui.components.CoinFilledIcon
+import erl.bilico.ui.components.CoinOutlineIcon
+import erl.bilico.ui.components.DanmakuStatIcon
+import erl.bilico.ui.components.DownloadFilledIcon
+import erl.bilico.ui.components.DownloadOutlineIcon
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.ExpandableSectionHeader
 import erl.bilico.ui.components.LoadingState
+import erl.bilico.ui.components.ShareOutlineIcon
+import erl.bilico.ui.components.WatchLaterOutlineIcon
+import erl.bilico.ui.components.StarFilledIcon
+import erl.bilico.ui.components.StarOutlineIcon
 import erl.bilico.ui.components.StatLabel
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.ExpandableList
 import io.github.suqi8.coui.kmp.basic.HorizontalDivider
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.icon.COUIIcons
-import io.github.suqi8.coui.kmp.icon.extended.Download
-import io.github.suqi8.coui.kmp.icon.extended.Favorites
 import io.github.suqi8.coui.kmp.icon.extended.Info
-import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.icon.extended.Play
 import kotlinx.coroutines.delay
-import io.github.suqi8.coui.kmp.icon.extended.Share
-import io.github.suqi8.coui.kmp.icon.extended.Stopwatch
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
 
@@ -107,14 +104,16 @@ internal fun VideoInfoTab(
     upOfficialType: Int = -1,
     upOfficialDesc: String = "",
     onLike: () -> Unit,
+    onTriple: (() -> Unit)? = null,
     onDislike: () -> Unit,
+    showDislike: Boolean = true,
     onCoin: () -> Unit,
     onFavorite: () -> Unit,
     onWatchLater: () -> Unit,
     onFollow: () -> Unit,
     onShare: () -> Unit,
-    onCacheVideo: (() -> Unit)? = null,
-    onCacheAudio: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
+    downloaded: Boolean = false,
     listState: LazyListState = rememberLazyListState(),
     topInset: Dp = 0.dp,
     bottomInset: Dp = 0.dp,
@@ -152,14 +151,16 @@ internal fun VideoInfoTab(
             upOfficialType = upOfficialType,
             upOfficialDesc = upOfficialDesc,
             onLike = onLike,
+            onTriple = onTriple,
             onDislike = onDislike,
+            showDislike = showDislike,
             onCoin = onCoin,
             onFavorite = onFavorite,
             onWatchLater = onWatchLater,
             onFollow = onFollow,
             onShare = onShare,
-            onCacheVideo = onCacheVideo,
-            onCacheAudio = onCacheAudio,
+            onDownload = onDownload,
+            downloaded = downloaded,
             listState = listState,
             topInset = topInset,
             bottomInset = bottomInset,
@@ -192,14 +193,16 @@ private fun InfoContent(
     upOfficialType: Int = -1,
     upOfficialDesc: String = "",
     onLike: () -> Unit,
+    onTriple: (() -> Unit)? = null,
     onDislike: () -> Unit,
+    showDislike: Boolean = true,
     onCoin: () -> Unit,
     onFavorite: () -> Unit,
     onWatchLater: () -> Unit,
     onFollow: () -> Unit,
     onShare: () -> Unit,
-    onCacheVideo: (() -> Unit)? = null,
-    onCacheAudio: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
+    downloaded: Boolean = false,
     listState: LazyListState,
     topInset: Dp = 0.dp,
     bottomInset: Dp = 0.dp,
@@ -227,6 +230,8 @@ private fun InfoContent(
     val accent = COUITheme.colorScheme.primary
     val descStyle = COUITheme.textStyles.body2
     val measurer = rememberTextMeasurer()
+
+    BindScrollToTop(listState)
 
     LazyColumn(
         state = listState,
@@ -260,19 +265,13 @@ private fun InfoContent(
                     .clickable { expanded = !expanded }
                     .animateContentSize(),
             ) {
-                Text(
-                    text = detail.title,
-                    style = COUITheme.textStyles.title3,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = if (expanded) Int.MAX_VALUE else TITLE_COLLAPSED_LINES,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                VideoTitleRow(detail = detail, expanded = expanded)
 
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     StatLabel(COUIIcons.Play, Formatters.formatStat(detail.view))
                     Spacer(Modifier.width(10.dp))
-                    StatLabel(COUIIcons.Messages, Formatters.formatStat(detail.danmaku))
+                    StatLabel(DanmakuStatIcon, Formatters.formatStat(detail.danmaku))
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = Formatters.formatDateTime(detail.pubdate),
@@ -306,13 +305,15 @@ private fun InfoContent(
                                 tint = COUITheme.colorScheme.onSurfaceSecondary,
                             )
                             Spacer(Modifier.width(DESC_ICON_GAP))
-                            Text(
-                                text = descText,
-                                style = descStyle,
-                                color = COUITheme.colorScheme.onSurfaceSecondary,
-                                maxLines = if (expanded) Int.MAX_VALUE else DESC_COLLAPSED_LINES,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = descText,
+                                    style = descStyle,
+                                    color = COUITheme.colorScheme.onSurfaceSecondary,
+                                    maxLines = if (expanded) Int.MAX_VALUE else DESC_COLLAPSED_LINES,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -324,17 +325,6 @@ private fun InfoContent(
         }
 
         item(key = "actions") {
-            var cacheMenuExpanded by remember { mutableStateOf(false) }
-            val cacheItems = remember(onCacheVideo, onCacheAudio) {
-                buildList {
-                    onCacheVideo?.let { action ->
-                        add(CouiMenuItem(label = "缓存视频（MP4）", onClick = action))
-                    }
-                    onCacheAudio?.let { action ->
-                        add(CouiMenuItem(label = "仅缓存音频（M4A）", onClick = action))
-                    }
-                }
-            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -346,61 +336,60 @@ private fun InfoContent(
                     text = Formatters.formatStat(detail.like),
                     active = liked,
                     onClick = onLike,
+                    onLongClick = onTriple,
+                    modifier = Modifier.weight(1f),
                 )
-                VideoAction(
-                    icon = if (disliked) DislikeFilledIcon else DislikeOutlineIcon,
-                    label = if (disliked) "取消点踩" else "点踩",
-                    text = "点踩",
-                    active = disliked,
-                    onClick = onDislike,
-                )
+                if (showDislike) {
+                    VideoAction(
+                        icon = if (disliked) DislikeFilledIcon else DislikeOutlineIcon,
+                        label = if (disliked) "取消点踩" else "点踩",
+                        text = "点踩",
+                        active = disliked,
+                        onClick = onDislike,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 VideoAction(
                     icon = if (coined > 0) CoinFilledIcon else CoinOutlineIcon,
                     label = if (coined > 0) "已投币" else "投币",
                     text = Formatters.formatStat(detail.coin),
                     active = coined > 0,
                     onClick = onCoin,
+                    modifier = Modifier.weight(1f),
                 )
                 VideoAction(
-                    icon = COUIIcons.Favorites,
+                    icon = if (favorited) StarFilledIcon else StarOutlineIcon,
                     label = if (favorited) "取消收藏" else "收藏",
                     text = Formatters.formatStat(detail.favorite),
                     active = favorited,
                     onClick = onFavorite,
+                    modifier = Modifier.weight(1f),
                 )
                 VideoAction(
-                    icon = COUIIcons.Stopwatch,
+                    icon = WatchLaterOutlineIcon,
                     label = "稍后再看",
                     text = "再看",
                     active = false,
                     onClick = onWatchLater,
+                    modifier = Modifier.weight(1f),
                 )
-                Box {
+                if (onDownload != null) {
                     VideoAction(
-                        icon = COUIIcons.Download,
+                        icon = if (downloaded) DownloadFilledIcon else DownloadOutlineIcon,
                         label = "离线缓存",
-                        text = "缓存",
-                        active = false,
-                        onClick = {
-                            if (cacheItems.isNotEmpty()) {
-                                cacheMenuExpanded = true
-                            }
-                        },
+                        text = if (downloaded) "已缓存" else "缓存",
+                        active = downloaded,
+                        onClick = onDownload,
+                        modifier = Modifier.weight(1f),
                     )
-                    if (cacheItems.isNotEmpty()) {
-                        CouiPopupMenu(
-                            show = cacheMenuExpanded,
-                            onDismiss = { cacheMenuExpanded = false },
-                            items = cacheItems,
-                        )
-                    }
                 }
                 VideoAction(
-                    icon = COUIIcons.Share,
+                    icon = ShareOutlineIcon,
                     label = "分享",
                     text = "分享",
                     active = false,
                     onClick = onShare,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -562,46 +551,6 @@ private fun VideoTagChips(
             )
         }
     }
-}
-
-/** B 站风格投币描边图标（外圈硬币 + 内嵌「币」字形，与点赞/点踩线宽统一）。 */
-private val CoinOutlineIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "BiliCoinOutline",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).addPath(
-        pathData = addPathNodes(
-            "M12,2.75 A9.25,9.25 0 1,1 11.99,2.75 Z " +
-                "M8.2,8.4 H15.8 " +
-                "M12,8.4 V16.8 " +
-                "M8.6,15.6 V11.6 H15.4 V15.6",
-        ),
-        stroke = SolidColor(Color.Black),
-        strokeLineWidth = 1.85f,
-        strokeLineCap = StrokeCap.Round,
-        strokeLineJoin = StrokeJoin.Round,
-    ).build()
-}
-
-/** B 站风格已投币实心图标（实心硬币内镂空「币」字形）。 */
-private val CoinFilledIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "BiliCoinFilled",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).addPath(
-        pathData = addPathNodes(
-            "M12,2 A10,10 0 1,0 12,22 A10,10 0 1,0 12,2 Z " +
-                "M8,7.4 H16 V9.1 H12.85 V10.7 H15.8 V16.2 H14.1 V12.35 H12.85 V17.2 H11.15 V12.35 H9.9 V16.2 H8.2 V10.7 H11.15 V9.1 H8 Z",
-        ),
-        fill = SolidColor(Color.Black),
-        pathFillType = PathFillType.EvenOdd,
-    ).build()
 }
 
 /** 折叠区块从收起转为展开且当前选集靠后时，等展开动画落位后滚到选中行。 */

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.BitmapImage
@@ -54,8 +55,10 @@ import erl.bilico.di.LocalAppContainer
 import erl.bilico.ui.components.Avatar
 import erl.bilico.ui.components.CouiMenuItem
 import erl.bilico.ui.components.CouiPopupMenu
+import erl.bilico.ui.components.DanmakuStatIcon
 import erl.bilico.ui.components.FeedDislikeDialog
 import erl.bilico.ui.components.KeywordBlockDialog
+import erl.bilico.ui.components.OfficialVerifyBadge
 import erl.bilico.ui.components.ReportDialog
 import erl.bilico.ui.components.ReportTarget
 import io.github.suqi8.coui.kmp.basic.Card
@@ -64,16 +67,102 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.preciseClickAnchor
 import io.github.suqi8.coui.kmp.basic.rememberPreciseClickState
 import io.github.suqi8.coui.kmp.icon.COUIIcons
-import io.github.suqi8.coui.kmp.icon.extended.Messages
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Play
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val FeedAvatarSize = 16.dp
+/** 不同列数下的卡片排版密度参数，保证 1~4 列都清晰不拥挤。 */
+private data class FeedCardMetrics(
+    val coverStatsHorizontalPadding: Dp,
+    val coverStatsBottomPadding: Dp,
+    val statGap: Dp,
+    val statFontSize: TextUnit,
+    val statLineHeight: TextUnit,
+    val statIconSize: Dp,
+    val showDanmakuOnCover: Boolean,
+    val infoPadding: PaddingValues,
+    val titleFontSize: TextUnit,
+    val titleLineHeight: TextUnit,
+    val rowSpacer: Dp,
+    val showAvatar: Boolean,
+    val avatarSize: Dp,
+    val avatarGap: Dp,
+    val upFontSize: TextUnit,
+    val upLineHeight: TextUnit,
+    val moreButtonSize: Dp,
+    val moreIconSize: Dp,
+) {
+    companion object {
+        fun forColumns(columns: Int): FeedCardMetrics = when {
+            columns >= 4 -> FeedCardMetrics(
+                coverStatsHorizontalPadding = 4.dp,
+                coverStatsBottomPadding = 2.dp,
+                statGap = 4.dp,
+                statFontSize = 9.sp,
+                statLineHeight = 11.sp,
+                statIconSize = 10.dp,
+                showDanmakuOnCover = false,
+                infoPadding = PaddingValues(start = 5.dp, end = 3.dp, top = 4.dp, bottom = 5.dp),
+                titleFontSize = 11.sp,
+                titleLineHeight = 14.sp,
+                rowSpacer = 3.dp,
+                showAvatar = false,
+                avatarSize = 14.dp,
+                avatarGap = 4.dp,
+                upFontSize = 10.sp,
+                upLineHeight = 12.sp,
+                moreButtonSize = 16.dp,
+                moreIconSize = 14.dp,
+            )
 
-/** 推荐流与排行榜共用的视频卡片：4:3 封面 + 镜像翻转模糊一体衬底（覆盖底边统计与紧凑信息区）。 */
+            columns == 3 -> FeedCardMetrics(
+                coverStatsHorizontalPadding = 6.dp,
+                coverStatsBottomPadding = 3.dp,
+                statGap = 6.dp,
+                statFontSize = 10.sp,
+                statLineHeight = 13.sp,
+                statIconSize = 11.dp,
+                showDanmakuOnCover = false,
+                infoPadding = PaddingValues(start = 7.dp, end = 4.dp, top = 5.dp, bottom = 6.dp),
+                titleFontSize = 12.sp,
+                titleLineHeight = 16.sp,
+                rowSpacer = 4.dp,
+                showAvatar = true,
+                avatarSize = 14.dp,
+                avatarGap = 4.dp,
+                upFontSize = 10.sp,
+                upLineHeight = 13.sp,
+                moreButtonSize = 16.dp,
+                moreIconSize = 14.dp,
+            )
+
+            else -> FeedCardMetrics(
+                coverStatsHorizontalPadding = 9.dp,
+                coverStatsBottomPadding = 3.dp,
+                statGap = 10.dp,
+                statFontSize = 11.sp,
+                statLineHeight = 14.sp,
+                statIconSize = 13.dp,
+                showDanmakuOnCover = true,
+                infoPadding = PaddingValues(start = 9.dp, end = 6.dp, top = 5.dp, bottom = 7.dp),
+                titleFontSize = 13.sp,
+                titleLineHeight = 17.sp,
+                rowSpacer = 5.dp,
+                showAvatar = true,
+                avatarSize = 16.dp,
+                avatarGap = 5.dp,
+                upFontSize = 11.sp,
+                upLineHeight = 14.sp,
+                moreButtonSize = 18.dp,
+                moreIconSize = 16.dp,
+            )
+        }
+    }
+}
+
+/** 推荐流与排行榜共用的视频卡片：封面 + 镜像翻转模糊一体衬底（覆盖底边统计与紧凑信息区）。 */
 @Composable
 internal fun FeedCard(
     video: FeedVideo,
@@ -81,18 +170,20 @@ internal fun FeedCard(
     coverWidthPx: Int,
     coverHeightPx: Int,
     modifier: Modifier = Modifier,
+    columns: Int = 2,
     onOpen: () -> Unit,
     onWatchLater: () -> Unit,
     generateBackground: Boolean = true,
     onCoverSettled: () -> Unit = {},
 ) {
+    val metrics = remember(columns) { FeedCardMetrics.forColumns(columns) }
     val coverUrl = remember(video.cover, coverWidthPx, coverHeightPx) {
         Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx)
     }
     val context = LocalContext.current
     val density = LocalDensity.current
-    val avatarUrl = remember(video.upFace, density) {
-        val pixels = with(density) { FeedAvatarSize.roundToPx() }.coerceAtLeast(1)
+    val avatarUrl = remember(video.upFace, density, metrics.avatarSize) {
+        val pixels = with(density) { metrics.avatarSize.roundToPx() }.coerceAtLeast(1)
         val thumbnailPx = ((pixels + 31) / 32) * 32
         Formatters.sizedImageUrl(video.upFace, thumbnailPx, thumbnailPx)
     }
@@ -175,7 +266,7 @@ internal fun FeedCard(
                     ) {
                         if (coverReady && (
                                 video.playCountText.isNotBlank() ||
-                                    video.danmakuText.isNotBlank() ||
+                                    (metrics.showDanmakuOnCover && video.danmakuText.isNotBlank()) ||
                                     video.durationText.isNotBlank()
                                 )
                         ) {
@@ -183,47 +274,51 @@ internal fun FeedCard(
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
                                     .fillMaxWidth()
-                                    .padding(start = 9.dp, end = 9.dp, bottom = 3.dp),
+                                    .padding(
+                                        start = metrics.coverStatsHorizontalPadding,
+                                        end = metrics.coverStatsHorizontalPadding,
+                                        bottom = metrics.coverStatsBottomPadding,
+                                    ),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .padding(end = 8.dp),
+                                        .padding(end = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     if (video.playCountText.isNotBlank()) {
                                         Icon(
                                             imageVector = COUIIcons.Play,
                                             contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
+                                            modifier = Modifier.size(metrics.statIconSize),
                                             tint = Color.White,
                                         )
                                         Spacer(Modifier.width(3.dp))
                                         Text(
                                             text = video.playCountText,
-                                            fontSize = 11.sp,
-                                            lineHeight = 14.sp,
+                                            fontSize = metrics.statFontSize,
+                                            lineHeight = metrics.statLineHeight,
                                             color = Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                     }
-                                    if (video.danmakuText.isNotBlank()) {
+                                    if (metrics.showDanmakuOnCover && video.danmakuText.isNotBlank()) {
                                         if (video.playCountText.isNotBlank()) {
-                                            Spacer(Modifier.width(10.dp))
+                                            Spacer(Modifier.width(metrics.statGap))
                                         }
                                         Icon(
-                                            imageVector = COUIIcons.Messages,
+                                            imageVector = DanmakuStatIcon,
                                             contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
+                                            modifier = Modifier.size(metrics.statIconSize),
                                             tint = Color.White,
                                         )
                                         Spacer(Modifier.width(3.dp))
                                         Text(
                                             text = video.danmakuText,
-                                            fontSize = 11.sp,
-                                            lineHeight = 14.sp,
+                                            fontSize = metrics.statFontSize,
+                                            lineHeight = metrics.statLineHeight,
                                             color = Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -233,8 +328,8 @@ internal fun FeedCard(
                                 if (video.durationText.isNotBlank()) {
                                     Text(
                                         text = video.durationText,
-                                        fontSize = 11.sp,
-                                        lineHeight = 14.sp,
+                                        fontSize = metrics.statFontSize,
+                                        lineHeight = metrics.statLineHeight,
                                         color = Color.White,
                                         maxLines = 1,
                                     )
@@ -244,12 +339,12 @@ internal fun FeedCard(
                     }
 
                     Column(
-                        modifier = Modifier.padding(start = 9.dp, end = 6.dp, top = 5.dp, bottom = 7.dp),
+                        modifier = Modifier.padding(metrics.infoPadding),
                     ) {
                         Text(
                             text = video.title,
-                            fontSize = 13.sp,
-                            lineHeight = 17.sp,
+                            fontSize = metrics.titleFontSize,
+                            lineHeight = metrics.titleLineHeight,
                             fontWeight = FontWeight.Medium,
                             color = titleColor,
                             minLines = 2,
@@ -257,29 +352,43 @@ internal fun FeedCard(
                             overflow = TextOverflow.Ellipsis,
                         )
 
-                        Spacer(Modifier.height(5.dp))
+                        Spacer(Modifier.height(metrics.rowSpacer))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (video.upFace.isNotBlank()) {
-                                Avatar(avatarUrl, FeedAvatarSize, officialType = video.officialType)
-                                Spacer(Modifier.width(5.dp))
+                            if (metrics.showAvatar && video.upFace.isNotBlank()) {
+                                Avatar(avatarUrl, metrics.avatarSize)
+                                Spacer(Modifier.width(metrics.avatarGap))
                             }
-                            Text(
-                                text = video.upName.ifBlank { "未知 UP" },
-                                fontSize = 11.sp,
-                                lineHeight = 14.sp,
-                                color = secondaryTextColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                            Row(
                                 modifier = Modifier.weight(1f),
-                            )
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = video.upName.ifBlank { "未知 UP" },
+                                    fontSize = metrics.upFontSize,
+                                    lineHeight = metrics.upLineHeight,
+                                    color = secondaryTextColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (video.officialType == 0 || video.officialType == 1) {
+                                    val idBadgeSize = with(LocalDensity.current) { metrics.upFontSize.toDp() }
+                                    Spacer(Modifier.width(3.dp))
+                                    OfficialVerifyBadge(
+                                        type = video.officialType,
+                                        size = idBadgeSize,
+                                        ringColor = Color.Transparent,
+                                    )
+                                }
+                            }
                             MoreMenu(
                                 onWatchLater = onWatchLater,
                                 onShare = { shareVideo(context, video) },
                                 items = cardMenuItems,
                                 tint = secondaryTextColor,
-                                buttonSize = 18.dp,
-                                iconSize = 16.dp,
+                                buttonSize = metrics.moreButtonSize,
+                                iconSize = metrics.moreIconSize,
                             )
                         }
                     }
@@ -295,7 +404,6 @@ internal fun FeedCard(
         )
     }
 }
-
 @Composable
 internal fun rememberVideoCardMenuItems(
     video: FeedVideo,
@@ -307,6 +415,20 @@ internal fun rememberVideoCardMenuItems(
     var showDislike by remember(video.bvid) { mutableStateOf(false) }
     var showReport by remember(video.bvid) { mutableStateOf(false) }
     var showKeyword by remember(video.bvid) { mutableStateOf(false) }
+    var showDownload by remember(video.bvid) { mutableStateOf(false) }
+
+    if (showDownload && container != null) {
+        erl.bilico.feature.download.FeedVideoDownloadDialog(
+            container = container,
+            bvid = video.bvid,
+            onEnqueued = { count ->
+                if (count > 0) {
+                    Toast.makeText(context, "已加入离线缓存队列 ($count)", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { showDownload = false },
+        )
+    }
 
     if (showDislike) {
         FeedDislikeDialog(
@@ -342,6 +464,9 @@ internal fun rememberVideoCardMenuItems(
     return remember(video, onWatchLater, container, context, scope) {
         buildList {
             add(CouiMenuItem("稍后再看", onWatchLater))
+            if (container != null) {
+                add(CouiMenuItem("离线缓存", { showDownload = true }))
+            }
             add(CouiMenuItem("分享", { shareVideo(context, video) }))
             if (container != null) {
                 add(CouiMenuItem("我不想看", onClick = { showDislike = true }, group = 1))

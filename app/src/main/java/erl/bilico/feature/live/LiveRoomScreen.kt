@@ -43,6 +43,7 @@ import erl.bilico.feature.video.DanmakuSettingsDialog
 import erl.bilico.feature.video.DanmakuTimeline
 import erl.bilico.feature.video.FIXED_DURATION_MS
 import erl.bilico.feature.video.FullscreenDanmakuComposer
+import erl.bilico.feature.video.LocalStageReturnHome
 import erl.bilico.feature.video.VideoFullscreenStage
 import erl.bilico.feature.video.VideoMessageToast
 import erl.bilico.feature.video.VideoPlayer
@@ -382,16 +383,22 @@ fun LiveRoomScreen(
         )
     }
 
+    // 直播优先走 SurfaceView：避免 60fps 直播流在 TextureView GPU 合成链路里丢帧/抖动。
+    val useSurfaceView = true
+
     VideoFullscreenStage(
         fullscreen = fullscreen,
         landscapeSide = deviceSide,
         inPipMode = inPipMode,
         activity = activity,
         darkMode = darkMode,
+        onExitFullscreen = { applyFullscreen(false) },
         videoAspect = videoAspect,
+        surfaceViewPlayer = useSurfaceView,
         playerContent = {
+            val returnHome = LocalStageReturnHome.current ?: { nav.popToMain() }
             val stageBackdrop = rememberLayerBackdrop()
-            val anyStageDialogOpen = fullscreen && (danmakuSettingsDialogVisible || castDialogVisible || lineDialogVisible || scDrawerVisible)
+            val anyStageDialogOpen = !useSurfaceView && fullscreen && (danmakuSettingsDialogVisible || castDialogVisible || lineDialogVisible || scDrawerVisible)
             VideoPlayer(
                 player = player,
                 title = state.detail?.title.orEmpty(),
@@ -401,6 +408,7 @@ fun LiveRoomScreen(
                 isBuffering = state.isPlaybackLoading || isBuffering,
                 errorMessage = state.playbackError ?: playerError,
                 qualityLabel = state.qualityLabel(),
+                hdrVideo = useSurfaceView,
                 speed = 1f,
                 fullscreen = fullscreen,
                 portraitFullscreen = fullscreen && fsController.portraitStage,
@@ -443,7 +451,7 @@ fun LiveRoomScreen(
                 } else {
                     null
                 },
-                onHome = { nav.popToMain() },
+                onHome = returnHome,
                 onCast = if (castStreamUrl.isNotBlank()) {
                     { castDialogVisible = true }
                 } else {
@@ -508,7 +516,7 @@ fun LiveRoomScreen(
             if (fullscreen) {
                 VideoMessageToast(message = liveMessage, inPipMode = inPipMode, inFullscreen = true)
                 CompositionLocalProvider(
-                    LocalBackdrop provides if (BlurEffectsEnabled) stageBackdrop else null,
+                    LocalBackdrop provides if (BlurEffectsEnabled && !useSurfaceView) stageBackdrop else null,
                 ) {
                     RenderLiveDialogs(inlineInStage = true)
                 }

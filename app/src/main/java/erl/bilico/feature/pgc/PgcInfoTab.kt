@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -37,8 +38,12 @@ import erl.bilico.ui.components.COUISmoothCapsuleShape
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.LoadingState
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.HorizontalDivider
+import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Download
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
 
@@ -53,6 +58,7 @@ internal fun PgcInfoTab(
     onRetry: () -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onSelectSeason: (Long) -> Unit,
+    onDownload: (() -> Unit)? = null,
     listState: LazyListState = rememberLazyListState(),
     topInset: Dp = 0.dp,
     bottomInset: Dp = 0.dp,
@@ -74,6 +80,7 @@ internal fun PgcInfoTab(
             onToggleFollow = onToggleFollow,
             onSelectEpisode = onSelectEpisode,
             onSelectSeason = onSelectSeason,
+            onDownload = onDownload,
             listState = listState,
             topInset = topInset,
             bottomInset = bottomInset,
@@ -90,12 +97,15 @@ private fun PgcInfoContent(
     onToggleFollow: () -> Unit,
     onSelectEpisode: (Int) -> Unit,
     onSelectSeason: (Long) -> Unit,
+    onDownload: (() -> Unit)? = null,
     listState: LazyListState,
     topInset: Dp = 0.dp,
     bottomInset: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
     var descExpanded by rememberSaveable(detail.seasonId) { mutableStateOf(false) }
+
+    BindScrollToTop(listState)
 
     LazyColumn(
         state = listState,
@@ -120,6 +130,23 @@ private fun PgcInfoContent(
                     style = COUITheme.textStyles.title3,
                     fontWeight = FontWeight.Medium,
                 )
+                if (onDownload != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(COUISmoothCapsuleShape)
+                            .background(COUITheme.colorScheme.surfaceContainer)
+                            .clickable(onClick = onDownload)
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = COUIIcons.Download,
+                            contentDescription = "离线缓存",
+                            modifier = Modifier.size(18.dp),
+                            tint = COUITheme.colorScheme.onSurface,
+                        )
+                    }
+                }
                 Text(
                     text = if (followed) "已追番" else "追番",
                     modifier = Modifier
