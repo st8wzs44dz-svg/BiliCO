@@ -9,6 +9,7 @@ import erl.bilico.data.model.MessageJumpTarget
 import erl.bilico.data.model.MessageKind
 import erl.bilico.data.model.MessageUnreadSummary
 import erl.bilico.data.repository.ImRepository
+import erl.bilico.data.repository.ImSessionEvent
 import erl.bilico.data.repository.MessageRepository
 import erl.bilico.data.session.SessionRepository
 import erl.bilico.ui.Route
@@ -73,16 +74,52 @@ class MessageViewModel(
                 _state.update { it.copy(unread = summary) }
             }
         }
-        ensureLoaded(initialKind)
-    }
-
-    fun refreshOnReturn() {
         viewModelScope.launch {
-            repository.refreshUnread(force = true)
-            if (_state.value.sessionsLoaded) {
-                loadSessions(firstPage = true)
+            imRepository.sessionEvents.collect { event ->
+                when (event) {
+                    is ImSessionEvent.SessionRead -> {
+                        var cleared = 0
+                        _state.update { cur ->
+                            val updated = cur.sessions.map { item ->
+                                if (item.talkerId == event.talkerId) {
+                                    cleared = item.unreadCount
+                                    if (item.unreadCount != 0) item.copy(unreadCount = 0) else item
+                                } else {
+                                    item
+                                }
+                            }
+                            cur.copy(sessions = updated)
+                        }
+                        if (cleared > 0) {
+                            repository.consumeSessionUnread(cleared)
+                        }
+                        if (cleared > 0 || repository.unread.value.session > 0) {
+                            repository.refreshUnread(force = true)
+                        }
+                    }
+                    is ImSessionEvent.MessageSent -> {
+                        _state.update { cur ->
+                            val idx = cur.sessions.indexOfFirst { it.talkerId == event.talkerId }
+                            if (idx < 0) return@update cur
+                            val updatedItem = cur.sessions[idx].copy(
+                                lastMessage = event.preview,
+                                timeText = "刚刚",
+                                timestamp = event.timestamp,
+                                unreadCount = 0,
+                            )
+                            val reordered = buildList(cur.sessions.size) {
+                                add(updatedItem)
+                                cur.sessions.forEachIndexed { i, item ->
+                                    if (i != idx) add(item)
+                                }
+                            }
+                            cur.copy(sessions = reordered)
+                        }
+                    }
+                }
             }
         }
+        ensureLoaded(initialKind)
     }
 
     /** 点击回复、@、点赞通知条目后跳转到对应的视频、动态、专栏或用户主页。 */
@@ -146,26 +183,36 @@ class MessageViewModel(
         }
     }
 
-    /** 第一次滑到某一类时拉它的第一页。 */
+    /** 第一次滑到某一类时拉它的第一页；若该类已加载但有新未读到达，则后台静默补拉并清零未读。 */
     fun ensureLoaded(kind: MessageKind) {
+        val unreadForKind = repository.unread.value.countOf(kind)
         if (kind == MessageKind.SESSION) {
             val cur = _state.value
-            if (cur.sessionsLoaded || cur.isSessionsLoading || loading.contains(kind)) return
-            loadSessions(firstPage = true)
+            if (cur.isSessionsLoading || loading.contains(kind)) return
+            if (!cur.sessionsLoaded) {
+                loadSessions(firstPage = true, silent = false)
+            } else if (unreadForKind > 0) {
+                loadSessions(firstPage = true, silent = true)
+            }
             return
         }
         val current = _state.value.of(kind)
-        if (current.loaded || current.isLoading || loading.contains(kind)) return
-        load(kind, firstPage = true)
+        if (current.isLoading || loading.contains(kind)) return
+        if (!current.loaded) {
+            load(kind, firstPage = true, silent = false)
+        } else if (unreadForKind > 0) {
+            pendingHighlightCounts[kind] = unreadForKind
+            load(kind, firstPage = true, silent = true)
+        }
     }
 
     /** 失败重试：丢掉这一类的游标和已有内容重来。 */
     fun reload(kind: MessageKind) {
         if (loading.contains(kind)) return
         if (kind == MessageKind.SESSION) {
-            loadSessions(firstPage = true)
+            loadSessions(firstPage = true, silent = false)
         } else {
-            load(kind, firstPage = true)
+            load(kind, firstPage = true, silent = false)
         }
     }
 
@@ -173,15 +220,15 @@ class MessageViewModel(
         if (kind == MessageKind.SESSION) {
             val cur = _state.value
             if (loading.contains(kind) || cur.isSessionsEnd || cur.sessions.isEmpty()) return
-            loadSessions(firstPage = false)
+            loadSessions(firstPage = false, silent = false)
             return
         }
         val current = _state.value.of(kind)
         if (loading.contains(kind) || current.isEnd || current.items.isEmpty()) return
-        load(kind, firstPage = false)
+        load(kind, firstPage = false, silent = false)
     }
 
-    private fun load(kind: MessageKind, firstPage: Boolean) {
+    private fun load(kind: MessageKind, firstPage: Boolean, silent: Boolean) {
         if (!loading.add(kind)) return
         if (!session.isLoggedIn()) {
             loading -= kind
@@ -190,7 +237,9 @@ class MessageViewModel(
         }
         if (firstPage) {
             cursors[kind] = null
-            set(kind, MessageKindState(isLoading = true))
+            if (!silent || _state.value.of(kind).items.isEmpty()) {
+                set(kind, MessageKindState(isLoading = true))
+            }
         } else {
             update(kind) { it.copy(isLoadingMore = true) }
         }
@@ -229,7 +278,7 @@ class MessageViewModel(
                         it.copy(
                             isLoading = false,
                             isLoadingMore = false,
-                            error = if (firstPage) error.message ?: "消息加载失败" else it.error,
+                            error = if (firstPage && !silent) error.message ?: "消息加载失败" else it.error,
                         )
                     }
                 }
@@ -237,7 +286,7 @@ class MessageViewModel(
         }
     }
 
-    private fun loadSessions(firstPage: Boolean) {
+    private fun loadSessions(firstPage: Boolean, silent: Boolean) {
         val kind = MessageKind.SESSION
         if (!loading.add(kind)) return
         if (!session.isLoggedIn()) {
@@ -246,7 +295,9 @@ class MessageViewModel(
             return
         }
         if (firstPage) {
-            _state.update { it.copy(isSessionsLoading = true, sessionsError = null) }
+            if (!silent || _state.value.sessions.isEmpty()) {
+                _state.update { it.copy(isSessionsLoading = true, sessionsError = null) }
+            }
         } else {
             _state.update { it.copy(isSessionsLoadingMore = true) }
         }
@@ -255,13 +306,21 @@ class MessageViewModel(
             imRepository.sessions(endTs)
                 .onSuccess { (list, nextTs) ->
                     _state.update {
+                        val merged = when {
+                            !firstPage -> it.sessions + list
+                            silent && it.sessions.isNotEmpty() -> {
+                                val freshIds = list.mapTo(HashSet(list.size)) { s -> s.talkerId }
+                                list + it.sessions.filter { old -> old.talkerId !in freshIds }
+                            }
+                            else -> list
+                        }
                         it.copy(
-                            sessions = if (firstPage) list else it.sessions + list,
+                            sessions = merged,
                             isSessionsLoading = false,
                             isSessionsLoadingMore = false,
                             sessionsLoaded = true,
-                            sessionsEndTs = nextTs,
-                            isSessionsEnd = nextTs == null,
+                            sessionsEndTs = if (silent && it.sessions.isNotEmpty()) it.sessionsEndTs else nextTs,
+                            isSessionsEnd = if (silent && it.sessions.isNotEmpty()) it.isSessionsEnd else nextTs == null,
                             sessionsError = null,
                         )
                     }
@@ -271,7 +330,11 @@ class MessageViewModel(
                         it.copy(
                             isSessionsLoading = false,
                             isSessionsLoadingMore = false,
-                            sessionsError = if (firstPage) error.message ?: "私信加载失败" else it.sessionsError,
+                            sessionsError = if (firstPage && !silent) {
+                                error.message ?: "私信加载失败"
+                            } else {
+                                it.sessionsError
+                            },
                         )
                     }
                 }

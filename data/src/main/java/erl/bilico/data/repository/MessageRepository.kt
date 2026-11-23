@@ -92,6 +92,14 @@ class MessageRepository(
             }
         }
     }
+
+    /** 单个私信会话标记已读后立即扣减本地私信未读数，避免等下一次轮询才消红点。 */
+    fun consumeSessionUnread(count: Int) {
+        if (count <= 0) return
+        _unread.update { cur ->
+            cur.copy(session = (cur.session - count).coerceAtLeast(0))
+        }
+    }
     suspend fun page(kind: MessageKind, cursor: MessageCursor?): Result<MessagePage> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -302,6 +310,24 @@ class MessageRepository(
         val response = api.systemNotices(params)
         if (response.code != 0) error(response.message.ifBlank { "消息加载失败(${response.code})" })
         val list = response.data.orEmpty()
+        if (cursor == null && list.isNotEmpty()) {
+            val maxCursor = list.maxOfOrNull { it.cursor } ?: 0L
+            val csrf = session.csrf()
+            if (maxCursor > 0L && csrf.isNotBlank()) {
+                runCatching {
+                    api.systemNoticeUpdateCursor(
+                        mapOf(
+                            "cursor" to maxCursor.toString(),
+                            "has_up" to "0",
+                            "build" to "0",
+                            "mobi_app" to "web",
+                            "csrf" to csrf,
+                            "csrf_token" to csrf,
+                        )
+                    )
+                }
+            }
+        }
         val items = list.map { notice ->
             MessageEntry(
                 key = "system-${notice.id}-${notice.cursor}",

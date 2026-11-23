@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -50,6 +51,7 @@ import coil3.compose.AsyncImage
 import erl.bilico.data.model.FeedVideo
 import erl.bilico.data.repository.BlockKeywordScope
 import erl.bilico.data.settings.CoverAspect
+import erl.bilico.data.settings.FeedCoverBlurStyle
 import erl.bilico.data.util.Formatters
 import erl.bilico.di.LocalAppContainer
 import erl.bilico.ui.components.Avatar
@@ -167,6 +169,7 @@ private data class FeedCardMetrics(
 internal fun FeedCard(
     video: FeedVideo,
     aspect: CoverAspect = CoverAspect.CLASSIC,
+    blurStyle: FeedCoverBlurStyle = FeedCoverBlurStyle.VIBRANT_DARK,
     coverWidthPx: Int,
     coverHeightPx: Int,
     modifier: Modifier = Modifier,
@@ -188,6 +191,7 @@ internal fun FeedCard(
         Formatters.sizedImageUrl(video.upFace, thumbnailPx, thumbnailPx)
     }
     val scheme = COUITheme.colorScheme
+    val appDarkTheme = scheme.surface.luminance() < 0.5f
     // 长按卡片在手指位置弹同一个三点菜单，不跳到播放页也不走卡片点击。
     val pressState = rememberPreciseClickState()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -195,16 +199,20 @@ internal fun FeedCard(
     var coverBitmap by remember(coverUrl) { mutableStateOf<Bitmap?>(null) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
     var coverHeight by remember { mutableStateOf(0) }
-    val background = rememberFeedCoverBackground(
-        video.cover, coverUrl, coverReady, coverBitmap, cardSize, coverHeight, generateBackground,
+    val backdrop = rememberFeedCoverBackground(
+        originalUrl = video.cover,
+        coverUrl = coverUrl,
+        coverReady = coverReady,
+        coverBitmap = coverBitmap,
+        cardSize = cardSize,
+        coverHeight = coverHeight,
+        generateBackground = generateBackground,
+        blurStyle = blurStyle,
+        appDarkTheme = appDarkTheme,
     )
-    val showDarkBlur = background != null
-    val titleColor = if (showDarkBlur) Color.White else scheme.onSurface
-    val secondaryTextColor = if (showDarkBlur) {
-        Color.White.copy(alpha = 0.72f)
-    } else {
-        scheme.onSurfaceSecondary
-    }
+    val titleColor = backdrop?.titleColor ?: scheme.onSurface
+    val secondaryTextColor = backdrop?.secondaryTextColor ?: scheme.onSurfaceSecondary
+    val statsColor = backdrop?.statsColor ?: Color.White
     val cardMenuItems = rememberVideoCardMenuItems(
         video = video,
         onWatchLater = onWatchLater,
@@ -241,13 +249,13 @@ internal fun FeedCard(
                             .aspectRatio(aspect.ratio)
                             .background(scheme.surfaceContainerHigh),
                     )
-                    if (background != null) {
+                    if (backdrop != null) {
                         Canvas(Modifier.matchParentSize()) {
                             val top = (coverHeight - FeedCoverOverlap.roundToPx()).coerceAtLeast(0)
                             val height = size.height.roundToInt() - top
                             if (height > 0) {
                                 drawImage(
-                                    image = background,
+                                    image = backdrop.bitmap,
                                     dstOffset = IntOffset(0, top),
                                     dstSize = IntSize(size.width.roundToInt(), height),
                                     filterQuality = FilterQuality.Low,
@@ -292,14 +300,14 @@ internal fun FeedCard(
                                             imageVector = COUIIcons.Play,
                                             contentDescription = null,
                                             modifier = Modifier.size(metrics.statIconSize),
-                                            tint = Color.White,
+                                            tint = statsColor,
                                         )
                                         Spacer(Modifier.width(3.dp))
                                         Text(
                                             text = video.playCountText,
                                             fontSize = metrics.statFontSize,
                                             lineHeight = metrics.statLineHeight,
-                                            color = Color.White,
+                                            color = statsColor,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
@@ -312,14 +320,14 @@ internal fun FeedCard(
                                             imageVector = DanmakuStatIcon,
                                             contentDescription = null,
                                             modifier = Modifier.size(metrics.statIconSize),
-                                            tint = Color.White,
+                                            tint = statsColor,
                                         )
                                         Spacer(Modifier.width(3.dp))
                                         Text(
                                             text = video.danmakuText,
                                             fontSize = metrics.statFontSize,
                                             lineHeight = metrics.statLineHeight,
-                                            color = Color.White,
+                                            color = statsColor,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
@@ -330,7 +338,7 @@ internal fun FeedCard(
                                         text = video.durationText,
                                         fontSize = metrics.statFontSize,
                                         lineHeight = metrics.statLineHeight,
-                                        color = Color.White,
+                                        color = statsColor,
                                         maxLines = 1,
                                     )
                                 }

@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -25,17 +26,27 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.size.Scale
 import coil3.toBitmap
+import erl.bilico.data.settings.FeedCoverBlurStyle
 import erl.bilico.data.util.Formatters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlin.math.cbrt
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.tanh
 
 private const val BackgroundScale = 0.25f
 private const val BackgroundCacheBytes = 3 * 1024 * 1024
+
+internal data class FeedCoverBackdrop(
+    val bitmap: ImageBitmap,
+    val isLightSurface: Boolean,
+    val titleColor: Color,
+    val secondaryTextColor: Color,
+    val statsColor: Color,
+)
 
 private data class BackgroundKey(
     val coverUrl: String,
@@ -44,10 +55,13 @@ private data class BackgroundKey(
     val infoHeight: Int,
     val overlapHeight: Int,
     val blurRadius: Int,
+    val blurStyle: FeedCoverBlurStyle,
+    val appDarkTheme: Boolean,
 )
 
-private val backgroundCache = object : LruCache<BackgroundKey, ImageBitmap>(BackgroundCacheBytes) {
-    override fun sizeOf(key: BackgroundKey, value: ImageBitmap): Int = value.width * value.height * 4
+private val backgroundCache = object : LruCache<BackgroundKey, FeedCoverBackdrop>(BackgroundCacheBytes) {
+    override fun sizeOf(key: BackgroundKey, value: FeedCoverBackdrop): Int =
+        value.bitmap.width * value.bitmap.height * 4
 }
 
 // Allow bounded parallel blur work across visible cards without stalling on a single slot.
@@ -64,16 +78,18 @@ internal fun rememberFeedCoverBackground(
     cardSize: IntSize,
     coverHeight: Int,
     generateBackground: Boolean,
-): ImageBitmap? {
+    blurStyle: FeedCoverBlurStyle,
+    appDarkTheme: Boolean,
+): FeedCoverBackdrop? {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val key = remember(coverUrl, cardSize, coverHeight, density) {
+    val key = remember(coverUrl, cardSize, coverHeight, density, blurStyle, appDarkTheme) {
         val infoHeight = cardSize.height - coverHeight
         if (coverUrl.isBlank() || cardSize.width <= 0 || coverHeight <= 0 || infoHeight <= 0) {
             null
         } else {
             val overlap = with(density) { FeedCoverOverlap.roundToPx() }.coerceAtMost(coverHeight)
-            val sigma = with(density) { 20.dp.toPx() } * BackgroundScale
+            val sigma = with(density) { 15.dp.toPx() } * BackgroundScale
             val radius = ((sqrt(4 * sigma * sigma + 1) - 1) / 2).roundToInt().coerceAtLeast(1)
             BackgroundKey(
                 coverUrl = coverUrl,
@@ -82,6 +98,8 @@ internal fun rememberFeedCoverBackground(
                 infoHeight = scaledPixels(infoHeight),
                 overlapHeight = scaledPixels(overlap),
                 blurRadius = radius,
+                blurStyle = blurStyle,
+                appDarkTheme = appDarkTheme,
             )
         }
     }
@@ -107,7 +125,7 @@ private suspend fun loadBackground(
     key: BackgroundKey,
     coverBitmap: Bitmap?,
     thumbnailUrl: String,
-): ImageBitmap? {
+): FeedCoverBackdrop? {
     // 优先直接复用 AsyncImage 已解码好的内存位图，避免二次读盘或走网络拖慢整屏卡片。
     if (coverBitmap != null && !coverBitmap.isRecycled) {
         val rendered = backgroundWorker.withPermit {
@@ -152,7 +170,15 @@ private suspend fun loadBackground(
     }
 }
 
-private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
+private data class ToneStats(
+    val avgLuma: Float,
+    val brightFraction: Float,
+    val domHue: Float,
+    val domSat: Float,
+    val avgSat: Float,
+)
+
+private fun renderBackground(source: Bitmap, key: BackgroundKey): FeedCoverBackdrop {
     val width = key.width
     val coverHeight = key.coverHeight
     val cover = Bitmap.createBitmap(width, coverHeight, Bitmap.Config.ARGB_8888)
@@ -177,7 +203,7 @@ private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
         coverPixels.copyInto(blurred, y * width, sourceRow * width, (sourceRow + 1) * width)
     }
 
-    // Three separable box passes approximate sigma 20dp at the card's display scale.
+    // Three separable box passes approximate sigma 15dp at the card's display scale.
     val transposed = IntArray(blurred.size)
     repeat(3) {
         blurRows(blurred, transposed, width, paddedHeight, key.blurRadius)
@@ -185,34 +211,237 @@ private fun renderBackground(source: Bitmap, key: BackgroundKey): ImageBitmap {
     }
     val pixels = if (padTop == 0) blurred else blurred.copyOfRange(padTop * width, paddedHeight * width)
 
-    // Smoothly feather the upper ~28dp of the overlap so the lower ~16dp (behind cover-bottom stats)
-    // already sits on the unified blurred & luminance-compressed backdrop without any separate dark scrim.
+    val tone = analyzeInfoTone(pixels, width, overlap, height)
+    val useLightSurface = key.blurStyle == FeedCoverBlurStyle.ADAPTIVE_TONE &&
+        !key.appDarkTheme &&
+        (tone.avgLuma >= 152f || (tone.avgLuma >= 138f && tone.brightFraction >= 0.45f))
+
     val fadeHeight = (overlap * 0.64f).roundToInt().coerceIn(1, (overlap - 2).coerceAtLeast(1))
     val maxRow = (height - 1).coerceAtLeast(1)
+
+    if (useLightSurface) {
+        applyLightPastelTone(pixels, width, height, fadeHeight, maxRow)
+        val inkColor = if (tone.avgSat >= 0.08f) {
+            val (ir, ig, ib) = hsvToRgb(
+                hue = tone.domHue,
+                sat = (tone.domSat * 0.52f).coerceIn(0.10f, 0.40f),
+                value = 0.14f,
+            )
+            Color(ir / 255f, ig / 255f, ib / 255f)
+        } else {
+            Color(0xFF16181C)
+        }
+        return FeedCoverBackdrop(
+            bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888).asImageBitmap(),
+            isLightSurface = true,
+            titleColor = inkColor,
+            secondaryTextColor = inkColor.copy(alpha = 0.68f),
+            statsColor = inkColor.copy(alpha = 0.88f),
+        )
+    }
+
+    applyVibrantDarkTone(pixels, width, height, fadeHeight, maxRow, tone)
+    return FeedCoverBackdrop(
+        bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888).asImageBitmap(),
+        isLightSurface = false,
+        titleColor = Color.White,
+        secondaryTextColor = Color.White.copy(alpha = 0.80f),
+        statsColor = Color.White,
+    )
+}
+
+private fun analyzeInfoTone(pixels: IntArray, width: Int, overlap: Int, height: Int): ToneStats {
+    val startY = overlap.coerceIn(0, (height - 1).coerceAtLeast(0))
+    var count = 0
+    var lumaSum = 0f
+    var brightCount = 0
+    var satSum = 0f
+    var domWeight = 0f
+    var domR = 0f
+    var domG = 0f
+    var domB = 0f
+    for (y in startY until height) {
+        val row = y * width
+        for (x in 0 until width) {
+            val c = pixels[row + x]
+            val r = (c shr 16 and 255).toFloat()
+            val g = (c shr 8 and 255).toFloat()
+            val b = (c and 255).toFloat()
+            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val maxC = maxOf(r, maxOf(g, b))
+            val minC = minOf(r, minOf(g, b))
+            val sat = if (maxC > 1f) (maxC - minC) / maxC else 0f
+            lumaSum += luma
+            if (luma >= 158f) brightCount++
+            satSum += sat
+            val w = sat * sat + 0.01f
+            domWeight += w
+            domR += r * w
+            domG += g * w
+            domB += b * w
+            count++
+        }
+    }
+    val safeCount = count.coerceAtLeast(1)
+    val safeWeight = domWeight.coerceAtLeast(0.01f)
+    val hsv = FloatArray(3)
+    android.graphics.Color.RGBToHSV(
+        (domR / safeWeight).roundToInt().coerceIn(0, 255),
+        (domG / safeWeight).roundToInt().coerceIn(0, 255),
+        (domB / safeWeight).roundToInt().coerceIn(0, 255),
+        hsv,
+    )
+    return ToneStats(
+        avgLuma = lumaSum / safeCount,
+        brightFraction = brightCount.toFloat() / safeCount,
+        domHue = hsv[0],
+        domSat = hsv[1],
+        avgSat = satSum / safeCount,
+    )
+}
+
+/** 方案一：高彩度深色玻璃——保留暗区鲜活色相、按膝点软压高光，并用同色相深宝石色替代纯黑压暗。 */
+private fun applyVibrantDarkTone(
+    pixels: IntArray,
+    width: Int,
+    height: Int,
+    fadeHeight: Int,
+    maxRow: Int,
+    tone: ToneStats,
+) {
+    val hasChroma = tone.avgSat >= 0.08f
+    val (anchorR, anchorG, anchorB) = if (hasChroma) {
+        val shiftedHue = warmShiftYellowHue(tone.domHue)
+        hsvToRgb(
+            hue = shiftedHue,
+            sat = (tone.domSat * 1.18f).coerceIn(0.40f, 0.86f),
+            value = 0.30f,
+        )
+    } else {
+        Triple(32f, 34f, 38f)
+    }
+
     for (y in 0 until height) {
         val progress = y.toFloat() / maxRow
         val blend = smootherStep(y.toFloat() / fadeHeight)
         val alpha = (255f * blend).roundToInt()
         val smoothProgress = smootherStep(progress)
-        val scrim = 1f - 0.22f * smoothProgress
-        // White stats/title text and 70%-white metadata need smooth contrast compression on bright covers.
-        val softCap = 114f - 26f * smoothProgress
-        val compressWeight = 0.40f + 0.60f * smootherStep(progress / 0.35f)
+        // WCAG AA 4.5:1 对白字允许 sRGB ~115；信息区收束在 104 以内，兼顾副文字 80% 白的清晰度。
+        val cap = 114f - 10f * smoothProgress
+        val knee = cap * 0.70f
+        val headRoom = (cap - knee).coerceAtLeast(1f)
         for (x in 0 until width) {
             val index = y * width + x
             val color = pixels[index]
-            val r = color shr 16 and 255
-            val g = color shr 8 and 255
-            val b = color and 255
-            val scrimmedLuma = (0.2126f * r + 0.7152f * g + 0.0722f * b) * scrim
-            val ratio = scrimmedLuma / softCap
-            val softGain = 1f / cbrt(1f + ratio * ratio * ratio)
-            val multiplier = scrim * (1f - compressWeight * (1f - softGain))
-            pixels[index] = (alpha shl 24) or ((r * multiplier).roundToInt() shl 16) or
-                ((g * multiplier).roundToInt() shl 8) or (b * multiplier).roundToInt()
+            var r = (color shr 16 and 255).toFloat()
+            var g = (color shr 8 and 255).toFloat()
+            var b = (color and 255).toFloat()
+
+            // 明黄区域压暗时容易发绿发脏，轻微向琥珀暖色偏移。
+            if (r > 130f && g > 115f && b < minOf(r, g) * 0.72f) {
+                val yellowWeight = ((minOf(r, g) - b) / 255f).coerceIn(0f, 1f) * smoothProgress
+                g -= yellowWeight * 16f
+            }
+
+            val luma0 = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val maxC = maxOf(r, maxOf(g, b))
+            val minC = minOf(r, minOf(g, b))
+            val sat = if (maxC > 1f) (maxC - minC) / maxC else 0f
+
+            // 智能彩度提纯（Vibrance）：仅拉升有色像素，纯灰白不强行着色。
+            val chromaGate = (sat / 0.12f).coerceIn(0f, 1f)
+            val boost = 1f + (0.50f * smoothProgress) * (1f - 0.42f * sat) * chromaGate
+            r = (luma0 + (r - luma0) * boost).coerceIn(0f, 255f)
+            g = (luma0 + (g - luma0) * boost).coerceIn(0f, 255f)
+            b = (luma0 + (b - luma0) * boost).coerceIn(0f, 255f)
+
+            val luma1 = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val scale = if (luma1 > knee) {
+                val newLuma = knee + headRoom * tanh(((luma1 - knee) / headRoom).toDouble()).toFloat()
+                newLuma / luma1
+            } else {
+                1f
+            }
+            r *= scale
+            g *= scale
+            b *= scale
+
+            // 对被大幅压暗的高亮彩色像素，向同色相深宝石锚点轻微融合，保住色相层次。
+            if (hasChroma && scale < 0.90f) {
+                val mix = ((1f - scale) * 0.26f * smoothProgress).coerceIn(0f, 0.22f)
+                r += (anchorR - r) * mix
+                g += (anchorG - g) * mix
+                b += (anchorB - b) * mix
+            }
+
+            pixels[index] = (alpha shl 24) or
+                (r.roundToInt().coerceIn(0, 255) shl 16) or
+                (g.roundToInt().coerceIn(0, 255) shl 8) or
+                b.roundToInt().coerceIn(0, 255)
         }
     }
-    return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
+/** 方案二亮色分流：粉彩毛玻璃亮底，温和抬升局部暗斑以保证深墨色文字高对比清晰可读。 */
+private fun applyLightPastelTone(
+    pixels: IntArray,
+    width: Int,
+    height: Int,
+    fadeHeight: Int,
+    maxRow: Int,
+) {
+    for (y in 0 until height) {
+        val progress = y.toFloat() / maxRow
+        val blend = smootherStep(y.toFloat() / fadeHeight)
+        val alpha = (255f * blend).roundToInt()
+        val smoothProgress = smootherStep(progress)
+        val minLuma = 202f + 14f * smoothProgress
+        for (x in 0 until width) {
+            val index = y * width + x
+            val color = pixels[index]
+            var r = (color shr 16 and 255).toFloat()
+            var g = (color shr 8 and 255).toFloat()
+            var b = (color and 255).toFloat()
+
+            val luma0 = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            val maxC = maxOf(r, maxOf(g, b))
+            val minC = minOf(r, minOf(g, b))
+            val sat = if (maxC > 1f) (maxC - minC) / maxC else 0f
+            val chromaGate = (sat / 0.10f).coerceIn(0f, 1f)
+            val boost = 1f + (0.24f * smoothProgress) * (1f - 0.35f * sat) * chromaGate
+            r = (luma0 + (r - luma0) * boost).coerceIn(0f, 255f)
+            g = (luma0 + (g - luma0) * boost).coerceIn(0f, 255f)
+            b = (luma0 + (b - luma0) * boost).coerceIn(0f, 255f)
+
+            val luma1 = 0.2126f * r + 0.7152f * g + 0.0722f * b
+            if (luma1 < minLuma) {
+                val lift = ((minLuma - luma1) / (248f - luma1).coerceAtLeast(1f)).coerceIn(0f, 0.92f)
+                r += (247f - r) * lift
+                g += (247f - g) * lift
+                b += (249f - b) * lift
+            }
+
+            pixels[index] = (alpha shl 24) or
+                (r.roundToInt().coerceIn(0, 255) shl 16) or
+                (g.roundToInt().coerceIn(0, 255) shl 8) or
+                b.roundToInt().coerceIn(0, 255)
+        }
+    }
+}
+
+private fun warmShiftYellowHue(hue: Float): Float {
+    if (hue !in 42f..74f) return hue
+    val weight = (1f - abs(hue - 56f) / 18f).coerceIn(0f, 1f)
+    return (hue - 10f * weight).coerceAtLeast(32f)
+}
+
+private fun hsvToRgb(hue: Float, sat: Float, value: Float): Triple<Float, Float, Float> {
+    val argb = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat.coerceIn(0f, 1f), value.coerceIn(0f, 1f)))
+    return Triple(
+        (argb shr 16 and 255).toFloat(),
+        (argb shr 8 and 255).toFloat(),
+        (argb and 255).toFloat(),
+    )
 }
 
 private fun smootherStep(value: Float): Float {

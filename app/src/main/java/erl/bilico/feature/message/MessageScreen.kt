@@ -39,7 +39,6 @@ import erl.bilico.data.model.MessageKind
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.comment.LikeOutlineIcon
 import erl.bilico.ui.BlurEffectsEnabled
-import erl.bilico.ui.LocalRouteIsTop
 import erl.bilico.ui.NavState
 import erl.bilico.ui.PinnedBarDensity
 import erl.bilico.ui.Route
@@ -91,20 +90,13 @@ fun MessageScreen(
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val initialPageIndex = remember {
-        MESSAGE_TABS.indexOfFirst { it.kind == viewModel.initialKind }.coerceAtLeast(0)
+        val preferred = container.messages.unread.value.preferredInitialKind()
+        MESSAGE_TABS.indexOfFirst { it.kind == preferred }.coerceAtLeast(0)
     }
     val pagerState = rememberPagerState(initialPage = initialPageIndex) { MESSAGE_TABS.size }
     val scope = rememberCoroutineScope()
     val pageColor = pageContainerColor()
     val layerBackdrop = rememberLayerBackdrop()
-    val isTop = LocalRouteIsTop.current
-    var wasOnTop by remember { mutableStateOf(isTop) }
-    LaunchedEffect(isTop) {
-        if (isTop && !wasOnTop) {
-            viewModel.refreshOnReturn()
-        }
-        wasOnTop = isTop
-    }
 
     var menuExpanded by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }

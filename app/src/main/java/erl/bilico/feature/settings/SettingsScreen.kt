@@ -18,6 +18,7 @@ import coil3.SingletonImageLoader
 import erl.bilico.BuildConfig
 import erl.bilico.data.repository.CdnOption
 import erl.bilico.data.settings.CoverAspect
+import erl.bilico.data.settings.FeedCoverBlurStyle
 import erl.bilico.data.settings.DefaultQuality
 import erl.bilico.data.settings.FeedPreferences
 import erl.bilico.data.util.Formatters
@@ -68,6 +69,7 @@ fun SettingsScreen(
     val autoNextRecommendPopup by container.settings.autoNext.recommendPopup.collectAsStateWithLifecycle()
     val autoNextCountdownSec by container.settings.autoNext.countdownSeconds.collectAsStateWithLifecycle()
     val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
+    val coverBlurStyle by container.settings.feed.coverBlurStyle.collectAsStateWithLifecycle()
     val feedColumns by container.settings.feed.columns.collectAsStateWithLifecycle()
     val feedRefreshCount by container.settings.feed.refreshCount.collectAsStateWithLifecycle()
     val topBarLayoutFullscreen by container.settings.playerTopBar.fullscreen.collectAsStateWithLifecycle()
@@ -122,6 +124,25 @@ fun SettingsScreen(
                     onSelectedIndexChange = { index ->
                         container.settings.feed.setCoverAspect(CoverAspect.fromCode(index))
                     },
+                )
+                val coverBlurStyleEntry = remember(coverBlurStyle) {
+                    DropdownEntry(
+                        FeedCoverBlurStyle.entries.map { option ->
+                            DropdownItem(
+                                text = option.label,
+                                summary = option.summary,
+                                selected = option == coverBlurStyle,
+                                onClick = { container.settings.feed.setCoverBlurStyle(option) },
+                            )
+                        },
+                    )
+                }
+                OverlayDropdownPreference(
+                    entry = coverBlurStyleEntry,
+                    title = "封面模糊底色",
+                    summary = coverBlurStyle.summary,
+                    modifier = Modifier.testTag("settings_cover_blur_style"),
+                    cardListPosition = CardListPosition.Middle,
                 )
                 OverlayDropdownPreference(
                     items = FEED_COLUMN_OPTIONS,

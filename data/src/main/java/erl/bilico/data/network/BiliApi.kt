@@ -449,7 +449,7 @@ interface BiliApi {
 
     // ---------- 消息 ----------
 
-    @GET("https://api.bilibili.com/x/msgfeed/unread")
+    @GET("https://api.vc.bilibili.com/x/im/web/msgfeed/unread")
     suspend fun messageUnread(@QueryMap params: Map<String, String>): MessageUnreadResponse
 
     @GET("https://api.vc.bilibili.com/session_svr/v1/session_svr/single_unread")
@@ -467,6 +467,10 @@ interface BiliApi {
     @GET("https://message.bilibili.com/x/sys-msg/query_notify_list")
     suspend fun systemNotices(@QueryMap params: Map<String, String>): SystemNoticeResponse
 
+    @Headers("Referer: https://message.bilibili.com/")
+    @GET("https://message.bilibili.com/x/sys-msg/update_cursor")
+    suspend fun systemNoticeUpdateCursor(@QueryMap params: Map<String, String>): BaseResponse
+
     // ---------- 私信 IM ----------
 
     @GET("https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions")
@@ -474,6 +478,10 @@ interface BiliApi {
 
     @GET("https://api.vc.bilibili.com/svr_sync/v1/svr_sync/fetch_session_msgs")
     suspend fun imFetchMsgs(@QueryMap params: Map<String, String>): ImFetchMsgsResponse
+
+    @FormUrlEncoded
+    @POST("https://api.vc.bilibili.com/session_svr/v1/session_svr/update_ack")
+    suspend fun imUpdateAck(@FieldMap params: Map<String, String>): BaseResponse
 
     @FormUrlEncoded
     @POST("https://api.vc.bilibili.com/web_im/v1/web_im/send_msg")

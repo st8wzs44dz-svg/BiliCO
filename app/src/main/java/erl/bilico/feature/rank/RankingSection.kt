@@ -90,6 +90,7 @@ fun RankingSection(
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
+    val coverBlurStyle by container.settings.feed.coverBlurStyle.collectAsStateWithLifecycle()
     val coverWidthPx = remember(screenWidthDp, density) {
         with(density) { ((screenWidthDp.dp - 15.dp) / 2f).roundToPx() }.coerceAtMost(600)
     }
@@ -197,6 +198,7 @@ fun RankingSection(
                 FeedCard(
                     video = video,
                     aspect = coverAspect,
+                    blurStyle = coverBlurStyle,
                     coverWidthPx = coverWidthPx,
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),

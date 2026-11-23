@@ -129,6 +129,7 @@ internal fun RecommendFeed(
     val context = LocalContext.current
 
     val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
+    val coverBlurStyle by container.settings.feed.coverBlurStyle.collectAsStateWithLifecycle()
     val columns by container.settings.feed.columns.collectAsStateWithLifecycle()
     val gridSpacing = 5.dp
     val prefetchDistance = maxOf(6, columns * 3)
@@ -336,6 +337,7 @@ internal fun RecommendFeed(
                 FeedCard(
                     video = video,
                     aspect = coverAspect,
+                    blurStyle = coverBlurStyle,
                     coverWidthPx = coverWidthPx,
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),

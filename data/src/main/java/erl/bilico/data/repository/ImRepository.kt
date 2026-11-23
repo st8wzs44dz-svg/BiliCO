@@ -12,10 +12,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+
+sealed interface ImSessionEvent {
+    data class SessionRead(val talkerId: Long) : ImSessionEvent
+    data class MessageSent(
+        val talkerId: Long,
+        val preview: String,
+        val timestamp: Long,
+    ) : ImSessionEvent
+}
 
 class ImRepository(
     private val api: BiliApi,
@@ -24,6 +36,9 @@ class ImRepository(
 ) {
     // 内存缓存 talker 资料，避免重复请求空间资料
     private val profileCache = ConcurrentHashMap<Long, Pair<String, String>>()
+
+    private val _sessionEvents = MutableSharedFlow<ImSessionEvent>(extraBufferCapacity = 16)
+    val sessionEvents: SharedFlow<ImSessionEvent> = _sessionEvents.asSharedFlow()
 
     suspend fun sessions(endTs: Long? = null): Result<Pair<List<ImSessionUi>, Long?>> =
         withContext(Dispatchers.IO) {
@@ -142,16 +157,60 @@ class ImRepository(
                     )
                 }.sortedBy { it.timestamp } // 按时间正序排列以便对话流展示
 
+                // 首次打开会话时向 B 站上报已读回执，清除服务端未读计数与会话红点。
+                if (endSeqno == 0L) {
+                    val ackSeqno = data.maxSeqno.takeIf { it > 0L }
+                        ?: data.messages.maxOfOrNull { it.msgSeqno }
+                        ?: 0L
+                    if (ackSeqno > 0L) {
+                        markSessionRead(talkerId = talkerId, ackSeqno = ackSeqno)
+                    }
+                }
+
                 list to (data.hasMore == 1)
             }
         }
+
+    suspend fun markSessionRead(
+        talkerId: Long,
+        ackSeqno: Long = 0L,
+        sessionType: Int = 1,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!session.isLoggedIn()) return@runCatching
+            val csrf = session.csrf()
+            if (csrf.isBlank()) return@runCatching
+            val form = buildMap {
+                put("talker_id", talkerId.toString())
+                put("session_type", sessionType.toString())
+                if (ackSeqno > 0L) put("ack_seqno", ackSeqno.toString())
+                put("build", "0")
+                put("mobi_app", "web")
+                put("csrf", csrf)
+                put("csrf_token", csrf)
+            }
+            val resp = api.imUpdateAck(form)
+            if (resp.code != 0) {
+                error(resp.message.ifBlank { "标记私信已读失败(${resp.code})" })
+            }
+            _sessionEvents.tryEmit(ImSessionEvent.SessionRead(talkerId))
+        }
+    }
 
     suspend fun sendMessage(talkerId: Long, text: String): Result<Long> =
         withContext(Dispatchers.IO) {
             runCatching {
                 require(text.isNotBlank()) { "消息内容不能为空" }
                 val contentJson = JSONObject().put("content", text).toString()
-                sendRawMessage(talkerId = talkerId, msgType = 1, contentJson = contentJson)
+                val msgKey = sendRawMessage(talkerId = talkerId, msgType = 1, contentJson = contentJson)
+                _sessionEvents.tryEmit(
+                    ImSessionEvent.MessageSent(
+                        talkerId = talkerId,
+                        preview = text.trim(),
+                        timestamp = System.currentTimeMillis() / 1000,
+                    )
+                )
+                msgKey
             }
         }
 
@@ -171,7 +230,15 @@ class ImRepository(
                     .put("original", 1)
                     .put("size", picture.sizeKb)
                     .toString()
-                sendRawMessage(talkerId = talkerId, msgType = 2, contentJson = contentJson)
+                val msgKey = sendRawMessage(talkerId = talkerId, msgType = 2, contentJson = contentJson)
+                _sessionEvents.tryEmit(
+                    ImSessionEvent.MessageSent(
+                        talkerId = talkerId,
+                        preview = "[图片]",
+                        timestamp = System.currentTimeMillis() / 1000,
+                    )
+                )
+                msgKey
             }
         }
 
