@@ -286,7 +286,7 @@ class MessageViewModel(
         }
     }
 
-    private fun loadSessions(firstPage: Boolean, silent: Boolean) {
+    private fun loadSessions(firstPage: Boolean, silent: Boolean = false) {
         val kind = MessageKind.SESSION
         if (!loading.add(kind)) return
         if (!session.isLoggedIn()) {

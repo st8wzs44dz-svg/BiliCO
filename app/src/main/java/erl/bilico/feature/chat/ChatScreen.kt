@@ -83,6 +83,7 @@ import erl.bilico.ui.components.EmptyState
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.LoadingState
 import erl.bilico.ui.components.RichCommentText
+import erl.bilico.ui.hyperlinkColor
 import erl.bilico.ui.components.SecondaryPage
 import erl.bilico.ui.components.inputCapsuleGlass
 import erl.bilico.ui.pageContainerColor
@@ -113,9 +114,11 @@ fun ChatScreen(
     talkerFace: String,
 ) {
     val viewModel: ChatViewModel = viewModel(key = "chat-$talkerId") {
-        ChatViewModel(container.im, container.comments, container.session, talkerId)
+        ChatViewModel(container.im, container.comments, container.session, container.messages, talkerId)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // ViewModel 挂在 Activity 上，退出再进来不会重建；这里补一次静默刷新，新消息才看得到。
+    LaunchedEffect(Unit) { viewModel.refreshOnEnter() }
     val listState = rememberLazyListState()
     val pageColor = pageContainerColor()
     // 消息列表录进这个图层，底栏的胶囊和发送按钮拿它做磨砂。
@@ -455,7 +458,7 @@ private fun ChatBubbleRow(
                         compactEmotes = true,
                         style = TextStyle(fontSize = 15.sp, lineHeight = 20.sp),
                         color = if (isMe) Color.White else scheme.onSurface,
-                        prefixColor = if (isMe) Color.White else scheme.primary,
+                        prefixColor = if (isMe) Color.White else hyperlinkColor(),
                     )
                 }
             }

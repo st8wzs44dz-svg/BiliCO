@@ -68,8 +68,15 @@ import erl.bilico.di.AppContainer
 import erl.bilico.feature.dynamic.DynamicImageViewer
 import erl.bilico.ui.BlurEffectsEnabled
 import erl.bilico.ui.ExpandEasing
+import erl.bilico.ui.LocalImageOriginRowKey
+import erl.bilico.ui.LocalImageOriginScope
 import erl.bilico.ui.LocalNavState
+import erl.bilico.ui.LocalTopBarBounds
 import erl.bilico.ui.Route
+import erl.bilico.ui.TopBarBounds
+import erl.bilico.ui.rememberImageOriginScope
+import erl.bilico.ui.reportBottomBarTop
+import erl.bilico.ui.reportTopBarBottom
 import erl.bilico.ui.components.LocalCommentSeek
 import erl.bilico.ui.components.LocalOpenBvid
 import erl.bilico.ui.components.navBottomPadding
@@ -189,6 +196,15 @@ internal fun ReplyDetailPage(
     val visibleReplies = remember(detailState.items, blocks) {
         detailState.items.mapNotNull { blocks.filterCommentTree(it) }
     }
+    val replySortTransition = rememberSortCrossfadeTransition(
+        renderedSort = detailState.renderedSort,
+        items = visibleReplies,
+        resetKey = comment.id,
+        scrollIndexProvider = { listState.firstVisibleItemIndex },
+        scrollOffsetProvider = { listState.firstVisibleItemScrollOffset },
+    )
+    var rootHeightPx by remember(comment.id) { mutableIntStateOf(0) }
+    var subHeaderHeightPx by remember(comment.id) { mutableIntStateOf(0) }
     LaunchedEffect(comment) {
         if (comment.id == detailState.rootComment.id) {
             detailState.rootComment = comment
@@ -374,12 +390,16 @@ internal fun ReplyDetailPage(
     val pageBackdrop = rememberLayerBackdrop()
     val overlayBackdrop = if (BlurEffectsEnabled) pageBackdrop else null
     val scrollRampPx = remember(density) { with(density) { 12.dp.toPx().coerceAtLeast(1f) } }
+    val replyBarBounds = remember { TopBarBounds() }
+    val imageOriginScope = rememberImageOriginScope(listState, replyBarBounds)
 
     CompositionLocalProvider(
         LocalOpenBvid provides parentOpenBvid,
         LocalCommentSeek provides parentSeek,
         LocalCommentTarget provides (oid to type),
         LocalEdgeToEdge provides true,
+        LocalTopBarBounds provides replyBarBounds,
+        LocalImageOriginScope provides imageOriginScope,
     ) {
         Box(
             modifier = modifier
@@ -396,119 +416,124 @@ internal fun ReplyDetailPage(
                 )
                 .imePadding(),
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .layerBackdropIf(BlurEffectsEnabled, pageBackdrop)
-                    .background(listBackground)
-                    .scrollEndHaptic(),
-                contentPadding = PaddingValues(
-                    start = 12.dp,
-                    top = topInset + REPLY_TOP_BAR_HEIGHT + 12.dp,
-                    end = 12.dp,
-                    bottom = listBottomPadding,
-                ),
+            val replyListPadding = PaddingValues(
+                start = 12.dp, top = topInset + REPLY_TOP_BAR_HEIGHT + 12.dp,
+                end = 12.dp, bottom = listBottomPadding,
+            )
+            val displayedReplyRows = remember(comment.id, threadedReplies, replySortTransition.currentItems) {
+                if (threadedReplies) buildReplyRows(comment.id, replySortTransition.currentItems)
+                else replySortTransition.currentItems.map { ReplyRow(it) }
+            }
+            Box(
+                Modifier.fillMaxSize().layerBackdropIf(BlurEffectsEnabled, pageBackdrop).background(listBackground),
             ) {
-                item(key = "root_comment") {
-                    ReplyRowSurface(
-                        flat = threadedReplies,
-                        modifier = if (threadedReplies && replyRows.isNotEmpty()) {
-                            Modifier.replyRootLine(threadLineColor, avatarSize)
-                        } else Modifier,
-                    ) {
-                        BiliCommentItem(
-                            comment = detailState.rootComment,
-                            onLike = detailState::toggleRootLike,
-                            onDislike = detailState::toggleRootDislike,
-                            onReply = { startReply(detailState.rootComment) },
-                            onOpenReplies = null,
-                            onOpenUser = onOpenUser,
-                            onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
-                            isSubReply = false,
-                            expandable = threadedReplies,
-                            flat = threadedReplies,
-                            currentMid = currentMid,
-                            onDelete = detailState::deleteRootComment,
-                            onClick = { startReply(detailState.rootComment) },
-                        )
-                    }
-                }
-
-                item(key = "sub_header") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 14.dp, bottom = 2.dp, start = 2.dp, end = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "相关回复共${maxOf(detailState.totalCount, detailState.items.size)}条",
-                            style = COUITheme.textStyles.main.copy(
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                            color = COUITheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-
-                if (visibleReplies.isEmpty()) {
-                    item(key = "sub_placeholder") {
-                        SubReplyPlaceholderBox(
-                            isLoading = detailState.isLoading,
-                            error = detailState.error,
-                            onRetry = { detailState.loadInitial() },
-                        )
-                    }
-                } else {
-                    itemsIndexed(replyRows, key = { _, row -> row.comment.id }) { index, row ->
-                        val reply = row.comment
-                        val displayReply = remember(reply, threadUserMids) {
-                            if (threadUserMids.isEmpty()) reply
-                            else reply.copy(mentions = threadUserMids + reply.mentions)
-                        }
-                        ReplyRowSurface(
-                            flat = threadedReplies,
-                            modifier = if (threadedReplies) {
-                                Modifier.replyBranchLines(row, threadLineColor, avatarSize, replyIndent)
-                                    .padding(start = replyIndent * row.depth, top = ReplyRowTopPadding)
-                            } else {
-                                Modifier.padding(top = 10.dp)
-                            },
-                        ) {
-                            BiliCommentItem(
-                                comment = displayReply,
-                                onLike = { detailState.toggleLike(reply) },
-                                onDislike = { detailState.toggleDislike(reply) },
-                                onReply = { startReply(reply) },
-                                onOpenUser = onOpenUser,
-                                onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
-                                isSubReply = true,
-                                expandable = threadedReplies,
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().scrollEndHaptic(),
+                    contentPadding = replyListPadding,
+                ) {
+                    item(key = "root_comment") {
+                        CompositionLocalProvider(LocalImageOriginRowKey provides "root_comment") {
+                            ReplyRowSurface(
                                 flat = threadedReplies,
-                                showDivider = threadedReplies && index < replyRows.lastIndex,
-                                currentMid = currentMid,
-                                onDelete = { detailState.deleteSubReply(reply) },
-                                onClick = { startReply(reply) },
-                            )
-                        }
-                    }
-                    if (detailState.isLoading) {
-                        item(key = "loading_more") {
-                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(40.dp),
-                                contentAlignment = Alignment.Center,
+                                    .onSizeChanged { rootHeightPx = it.height }
+                                    .then(
+                                        if (threadedReplies && displayedReplyRows.isNotEmpty()) {
+                                            Modifier.replyRootLine(threadLineColor, avatarSize)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
                             ) {
-                                CircularProgressIndicator(size = 16.dp)
+                                BiliCommentItem(
+                                    comment = detailState.rootComment,
+                                    onLike = detailState::toggleRootLike,
+                                    onDislike = detailState::toggleRootDislike,
+                                    onReply = { startReply(detailState.rootComment) },
+                                    onOpenReplies = null,
+                                    onOpenUser = onOpenUser,
+                                    onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
+                                    isSubReply = false,
+                                    expandable = threadedReplies,
+                                    flat = threadedReplies,
+                                    currentMid = currentMid,
+                                    onDelete = detailState::deleteRootComment,
+                                    onClick = { startReply(detailState.rootComment) },
+                                )
                             }
                         }
                     }
+
+                    item(key = "sub_header") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().onSizeChanged { subHeaderHeightPx = it.height }.padding(top = 14.dp, bottom = 2.dp, start = 2.dp, end = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "相关回复共${maxOf(detailState.totalCount, detailState.items.size)}条",
+                                style = COUITheme.textStyles.main.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
+                                color = COUITheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                            )
+                            ReplySortTabRow(sort = detailState.sort, onSelectSort = detailState::selectSort)
+                        }
+                    }
+
+                    if (displayedReplyRows.isEmpty()) {
+                        item(key = "sub_placeholder") {
+                            SubReplyPlaceholderBox(detailState.isLoading, detailState.error, onRetry = { detailState.loadInitial() })
+                        }
+                    } else {
+                        itemsIndexed(displayedReplyRows, key = { _, row -> row.comment.id }) { index, row ->
+                            val reply = row.comment
+                            val displayReply = remember(reply, threadUserMids) {
+                                if (threadUserMids.isEmpty()) reply else reply.copy(mentions = threadUserMids + reply.mentions)
+                            }
+                            CompositionLocalProvider(LocalImageOriginRowKey provides reply.id) {
+                                ReplyRowSurface(
+                                    flat = threadedReplies,
+                                    modifier = if (threadedReplies) {
+                                        Modifier.replyBranchLines(row, threadLineColor, avatarSize, replyIndent)
+                                            .padding(start = replyIndent * row.depth, top = ReplyRowTopPadding)
+                                    } else {
+                                        Modifier.padding(top = 10.dp)
+                                    },
+                                ) {
+                                    BiliCommentItem(
+                                        comment = displayReply,
+                                        onLike = { detailState.toggleLike(reply) },
+                                        onDislike = { detailState.toggleDislike(reply) },
+                                        onReply = { startReply(reply) },
+                                        onOpenUser = onOpenUser,
+                                        onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
+                                        isSubReply = true,
+                                        expandable = threadedReplies,
+                                        flat = threadedReplies,
+                                        showDivider = threadedReplies && index < displayedReplyRows.lastIndex,
+                                        currentMid = currentMid,
+                                        onDelete = { detailState.deleteSubReply(reply) },
+                                        onClick = { startReply(reply) },
+                                    )
+                                }
+                            }
+                        }
+                        if (detailState.isLoading) {
+                            item(key = "loading_more") {
+                                Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(size = 16.dp) }
+                            }
+                        }
+                    }
+                }
+
+                SortCrossfadeListOverlay(
+                    exitingItems = replySortTransition.exitingItems, exitAlpha = replySortTransition.exitAlpha,
+                    exitScrollIndex = replySortTransition.exitScrollIndex, exitScrollOffset = replySortTransition.exitScrollOffset,
+                    contentPadding = replyListPadding, spacerHeightsPx = listOf(rootHeightPx, subHeaderHeightPx), key = { "exit-${it.id}" },
+                ) { reply ->
+                    val displayReply = remember(reply, threadUserMids) {
+                        if (threadUserMids.isEmpty()) reply else reply.copy(mentions = threadUserMids + reply.mentions)
+                    }
+                    ExitCommentCard(comment = displayReply, currentMid = currentMid, isSubReply = true)
                 }
             }
 
@@ -533,39 +558,21 @@ internal fun ReplyDetailPage(
                 },
                 containerColor = pageBg,
                 backdrop = overlayBackdrop,
-                sort = if (detailState.sort == ReplySort.New) CommentSort.New else CommentSort.Hot,
-                onToggleSort = {
-                    val next = if (detailState.sort == ReplySort.Hot) ReplySort.New else ReplySort.Hot
-                    detailState.selectSort(next)
-                    listState.requestScrollToItem(0)
-                },
-                onClose = onClose,
-                modifier = Modifier.align(Alignment.TopCenter),
+                modifier = Modifier.align(Alignment.TopCenter).reportTopBarBottom(replyBarBounds),
                 topInset = topInset,
             )
 
             ReplyComposer(
                 draft = draft,
                 onDraftChange = { next ->
-                    draft = if (next.text.length <= MAX_REPLY_LENGTH) {
-                        next
-                    } else {
-                        next.copy(text = next.text.take(MAX_REPLY_LENGTH))
-                    }
+                    draft = if (next.text.length <= MAX_REPLY_LENGTH) next else next.copy(text = next.text.take(MAX_REPLY_LENGTH))
                 },
-                emotes = emoteLookup,
-                pictures = pictures,
-                onRemovePicture = { idx ->
-                    pictures = pictures.filterIndexed { i, _ -> i != idx }
-                },
-                replyTarget = replyTarget,
-                onClearReplyTarget = { replyTarget = null },
-                isSending = detailState.isSending,
-                isDark = isDark,
-                focusRequester = composerFocus,
-                interactionSource = editorInteractionSource,
-                focusTick = focusTick,
-                emotePanelOpen = emotePanelOpen,
+                emotes = emoteLookup, pictures = pictures,
+                onRemovePicture = { idx -> pictures = pictures.filterIndexed { i, _ -> i != idx } },
+                replyTarget = replyTarget, onClearReplyTarget = { replyTarget = null },
+                isSending = detailState.isSending, isDark = isDark,
+                focusRequester = composerFocus, interactionSource = editorInteractionSource,
+                focusTick = focusTick, emotePanelOpen = emotePanelOpen,
                 onToggleEmote = ::toggleEmotePanel,
                 onPickImage = {
                     if (pictures.size >= MAX_REPLY_PICTURES) {
@@ -573,14 +580,10 @@ internal fun ReplyDetailPage(
                     } else {
                         if (emotePanelOpen) emotePanelOpen = false
                         keyboard?.hide()
-                        pickImages.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                        )
+                        pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }
                 },
-                emotePackages = emotePackages,
-                emotesFailed = emotesFailed,
-                emoteManageUrl = emoteManageUrl,
+                emotePackages = emotePackages, emotesFailed = emotesFailed, emoteManageUrl = emoteManageUrl,
                 onOpenEmoteManage = { url ->
                     if (nav == null) {
                         detailState.showToast("当前页面暂不支持打开表情管理")
@@ -592,23 +595,15 @@ internal fun ReplyDetailPage(
                 },
                 onPickEmote = ::insertEmote,
                 onSend = {
-                    detailState.sendReply(
-                        draft = draft.text,
-                        pictures = pictures,
-                        context = context,
-                        replyTarget = replyTarget,
-                    ) {
+                    detailState.sendReply(draft.text, pictures, context, replyTarget) {
                         draft = TextFieldValue("")
                         pictures = emptyList()
                         replyTarget = null
                         emotePanelOpen = false
                     }
                 },
-                panelBackground = pageBg,
-                bottomPadding = composerBottomPadding,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .onSizeChanged { bottomStackPx = it.height },
+                panelBackground = pageBg, bottomPadding = composerBottomPadding,
+                modifier = Modifier.align(Alignment.BottomCenter).reportBottomBarTop(replyBarBounds).onSizeChanged { bottomStackPx = it.height },
                 backdrop = overlayBackdrop,
             )
         }

@@ -15,20 +15,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class CommentUiState(
-    val items: List<Comment> = emptyList(),
-    val isLoading: Boolean = true,
-    val isLoadingMore: Boolean = false,
-    val isEnd: Boolean = false,
-    val isSending: Boolean = false,
-    val error: String? = null,
-    val total: Int = 0,
-    val message: String? = null,
-    val sort: CommentSort = CommentSort.Hot,
-    val focusRootId: Long = 0L,
-    val pendingReplyDialog: Pair<Comment, Long>? = null,
-)
-
 /** 评论主楼：按热度分页、发表评论与楼层回复、点赞主楼。 */
 class CommentViewModel(
     private val repository: CommentRepository,
@@ -44,6 +30,7 @@ class CommentViewModel(
     private var cursor: String? = null
     private var newestPage = 0
     private var loadJob: Job? = null
+    private var refreshGeneration = 0
     private var messageJob: Job? = null
     private var targetHandled = false
 
@@ -53,15 +40,29 @@ class CommentViewModel(
 
     fun refresh() {
         loadJob?.cancel()
-        _state.update { it.copy(isLoading = true, isLoadingMore = false, error = null) }
-        cursor = null
-        newestPage = 0
+        val reqGen = ++refreshGeneration
+        val preserveExisting = _state.value.items.isNotEmpty()
         val sort = _state.value.sort
         loadJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isLoading = !preserveExisting,
+                    isSwitchingSort = preserveExisting,
+                    isLoadingMore = false,
+                    error = null,
+                )
+            }
+            if (!preserveExisting) {
+                cursor = null
+                newestPage = 0
+            }
             val result = repository.mainComments(oid, null, type, sort)
             ensureActive()
             result
                 .onSuccess { page ->
+                    if (reqGen != refreshGeneration) return@onSuccess
+                    cursor = page.nextOffset
+                    newestPage = if (sort == CommentSort.New) 1 else 0
                     var mergedItems = page.comments
                     var focusRootId = 0L
                     var pendingReplyDialog: Pair<Comment, Long>? = null
@@ -91,7 +92,9 @@ class CommentViewModel(
                         it.copy(
                             items = mergedItems,
                             isLoading = false,
+                            isSwitchingSort = false,
                             isLoadingMore = false,
+                            renderedSort = sort,
                             // 按时间那一页的 is_end 不可信，按总条数判断还有没有下一页。
                             isEnd = if (sort == CommentSort.New) {
                                 page.comments.size >= page.total
@@ -105,14 +108,28 @@ class CommentViewModel(
                     }
                 }
                 .onFailure { error ->
+                    if (reqGen != refreshGeneration) return@onFailure
                     _state.update {
-                        it.copy(isLoading = false, error = error.message ?: "评论加载失败")
+                        if (preserveExisting) {
+                            it.copy(
+                                isLoading = false,
+                                isSwitchingSort = false,
+                                sort = it.renderedSort,
+                            )
+                        } else {
+                            it.copy(
+                                isLoading = false,
+                                isSwitchingSort = false,
+                                error = error.message ?: "评论加载失败",
+                            )
+                        }
                     }
+                    if (preserveExisting) showMessage(error.message ?: "评论加载失败")
                 }
         }
     }
 
-    /** 热度 / 时间来回切：先清空列表再重新拉第一页，避免两种顺序的条目混在一起。 */
+    /** 热度 / 时间来回切：保留当前已加载列表直到新排序加载完成，再淡出淡入切换。 */
     fun toggleSort() {
         val next = if (_state.value.sort == CommentSort.Hot) CommentSort.New else CommentSort.Hot
         selectSort(next)
@@ -120,25 +137,13 @@ class CommentViewModel(
 
     fun selectSort(next: CommentSort) {
         if (_state.value.sort == next) return
-        _state.update {
-            it.copy(
-                sort = next,
-                items = emptyList(),
-                total = 0,
-                isEnd = false,
-                isLoading = true,
-                isLoadingMore = false,
-                error = null,
-                focusRootId = 0L,
-                pendingReplyDialog = null,
-            )
-        }
+        _state.update { it.copy(sort = next, isLoadingMore = false) }
         refresh()
     }
 
     fun loadMore() {
         val current = _state.value
-        if (current.isLoading || current.isLoadingMore || current.isEnd) return
+        if (current.isLoading || current.isSwitchingSort || current.isLoadingMore || current.isEnd) return
         if (current.sort == CommentSort.New) {
             loadNewestMore()
             return
@@ -163,13 +168,7 @@ class CommentViewModel(
                     }
                 }
                 .onFailure { error ->
-                    _state.update {
-                        it.copy(
-                            isLoadingMore = false,
-                            isEnd = true,
-                            error = error.message ?: "评论加载失败",
-                        )
-                    }
+                    _state.update { it.copy(isLoadingMore = false, isEnd = true, error = error.message ?: "评论加载失败") }
                 }
         }
     }
@@ -196,12 +195,7 @@ class CommentViewModel(
                 }
                 .onFailure { error ->
                     // 失败别把 isEnd 钉死，滑到底再试还能继续拉。
-                    _state.update {
-                        it.copy(
-                            isLoadingMore = false,
-                            error = error.message ?: "评论加载失败",
-                        )
-                    }
+                    _state.update { it.copy(isLoadingMore = false, error = error.message ?: "评论加载失败") }
                 }
         }
     }
@@ -214,13 +208,7 @@ class CommentViewModel(
         if (_state.value.isSending) return
         _state.update { it.copy(isSending = true) }
         viewModelScope.launch {
-            repository.addComment(
-                oid = oid,
-                message = content,
-                type = type,
-                pictures = pictures,
-                atMids = atMids,
-            )
+            repository.addComment(oid = oid, message = content, type = type, pictures = pictures, atMids = atMids)
                 .onSuccess { created ->
                     _state.update { s ->
                         s.copy(
@@ -273,15 +261,8 @@ class CommentViewModel(
             s.copy(
                 total = s.total + 1,
                 items = s.items.map { item ->
-                    if (item.id == rootId) {
-                        val merged = (item.replies + created).distinctBy { it.id }
-                        item.copy(
-                            replyCount = item.replyCount + 1,
-                            replies = merged,
-                        )
-                    } else {
-                        item
-                    }
+                    if (item.id == rootId) item.copy(replyCount = item.replyCount + 1, replies = (item.replies + created).distinctBy { it.id })
+                    else item
                 },
             )
         }
@@ -293,10 +274,7 @@ class CommentViewModel(
             val nextItems = s.items.map { item ->
                 if (item.id == rootId) {
                     removed = true
-                    item.copy(
-                        replyCount = (item.replyCount - 1).coerceAtLeast(0),
-                        replies = item.replies.filterNot { it.id == replyId },
-                    )
+                    item.copy(replyCount = (item.replyCount - 1).coerceAtLeast(0), replies = item.replies.filterNot { it.id == replyId })
                 } else {
                     item
                 }

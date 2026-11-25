@@ -62,6 +62,7 @@ import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.FullPageRefreshHoldMillis
 import erl.bilico.ui.components.FullPageRefreshTexts
 import erl.bilico.ui.components.LoadingState
+import erl.bilico.ui.components.RefreshDivider
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.expandOrigin
 import erl.bilico.ui.pageContainerColor
@@ -342,7 +343,7 @@ internal fun RecommendFeed(
                     coverHeightPx = coverHeightPx,
                     modifier = Modifier.expandOrigin(origin),
                     columns = columns,
-                    onOpen = { nav.push(Route.Video(video.bvid), origin) },
+                    onOpen = { nav.push(Route.Video(video.bvid, promoted = video.isPromoted), origin) },
                     onWatchLater = rememberWatchLaterAction(container, video),
                     generateBackground = imageWorkActive && visible,
                     onCoverSettled = { settledCovers[video.bvid] = video.cover },
@@ -355,7 +356,12 @@ internal fun RecommendFeed(
             ) { card(it) }
             if (inserted in 1 until shown.items.size) {
                 item(key = RefreshDividerKey, span = { GridItemSpan(maxLineSpan) }) {
-                    RefreshDivider(onBackToTop = { scope.launch { listState.animateScrollToItem(0) } })
+                    RefreshDivider(
+                        onBackToTop = {
+                            viewModel.refresh()
+                            scope.launch { listState.animateScrollToItem(0) }
+                        },
+                    )
                 }
             }
             items(
@@ -379,41 +385,6 @@ internal fun RecommendFeed(
                     }
                 }
             }
-        }
-    }
-}
-
-/**
- * 推荐流刷新后的拼接占位：整块和一张卡片差不多高，提示这批新内容看完了。
- * 点一下滚回列表顶部。
- */
-@Composable
-private fun RefreshDivider(onBackToTop: () -> Unit) {
-    val scheme = COUITheme.colorScheme
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(104.dp),
-        insideMargin = PaddingValues(0.dp),
-        onClick = onBackToTop,
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "本次刷新的内容已看完",
-                fontSize = 12.sp,
-                color = scheme.onSurfaceSecondary,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "回到顶部",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = scheme.primary,
-            )
         }
     }
 }

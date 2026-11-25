@@ -413,7 +413,7 @@ fun PgcScreen(
         },
         playerContent = {
             val stageBackdrop = rememberLayerBackdrop()
-            val anyStageDialogOpen = fullscreen && (danmakuSettingsDialogVisible || castDialogVisible || downloadDialogVisible)
+            val captureStageBackdrop = BlurEffectsEnabled && fullscreen && !hdrSurface
             val returnHome = LocalStageReturnHome.current ?: { nav.popToMain() }
             VideoPlayer(
                 player = player,
@@ -456,7 +456,7 @@ fun PgcScreen(
                 onRetry = viewModel::retryPlayback,
                 modifier = Modifier
                     .fillMaxSize()
-                    .layerBackdropIf(BlurEffectsEnabled && anyStageDialogOpen, stageBackdrop),
+                    .layerBackdropIf(captureStageBackdrop, stageBackdrop),
                 inPipMode = inPipMode,
                 danmakuEnabled = danmakuEnabled,
                 onToggleDanmaku = { container.settings.setDanmakuEnabled(!danmakuEnabled) },
@@ -526,7 +526,7 @@ fun PgcScreen(
             if (fullscreen) {
                 VideoMessageToast(message = message, inPipMode = inPipMode, inFullscreen = true)
                 CompositionLocalProvider(
-                    LocalBackdrop provides if (BlurEffectsEnabled) stageBackdrop else null,
+                    LocalBackdrop provides if (BlurEffectsEnabled && !hdrSurface) stageBackdrop else null,
                 ) {
                     RenderPgcDialogs(inlineInStage = true)
                 }

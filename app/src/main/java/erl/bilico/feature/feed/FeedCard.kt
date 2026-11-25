@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -40,6 +42,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -143,7 +146,7 @@ private data class FeedCardMetrics(
             else -> FeedCardMetrics(
                 coverStatsHorizontalPadding = 9.dp,
                 coverStatsBottomPadding = 3.dp,
-                statGap = 10.dp,
+                statGap = 8.dp,
                 statFontSize = 11.sp,
                 statLineHeight = 14.sp,
                 statIconSize = 13.dp,
@@ -272,13 +275,26 @@ internal fun FeedCard(
                             .aspectRatio(aspect.ratio)
                             .onSizeChanged { coverHeight = it.height },
                     ) {
-                        if (coverReady && (
-                                video.playCountText.isNotBlank() ||
-                                    (metrics.showDanmakuOnCover && video.danmakuText.isNotBlank()) ||
-                                    video.durationText.isNotBlank()
-                                )
-                        ) {
-                            Row(
+                        if (coverReady) {
+                            val compactPlay = remember(video.playCountText) {
+                                Formatters.compactStatLabel(video.playCountText)
+                            }
+                            val compactDanmaku = remember(video.danmakuText, metrics.showDanmakuOnCover) {
+                                if (metrics.showDanmakuOnCover) {
+                                    Formatters.compactStatLabel(video.danmakuText)
+                                } else {
+                                    ""
+                                }
+                            }
+                            val compactDuration = remember(video.durationText) {
+                                Formatters.compactDurationLabel(video.durationText)
+                            }
+                            CoverBottomStats(
+                                playText = compactPlay,
+                                danmakuText = compactDanmaku,
+                                durationText = compactDuration,
+                                color = statsColor,
+                                metrics = metrics,
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
                                     .fillMaxWidth()
@@ -287,62 +303,7 @@ internal fun FeedCard(
                                         end = metrics.coverStatsHorizontalPadding,
                                         bottom = metrics.coverStatsBottomPadding,
                                     ),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .padding(end = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    if (video.playCountText.isNotBlank()) {
-                                        Icon(
-                                            imageVector = COUIIcons.Play,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(metrics.statIconSize),
-                                            tint = statsColor,
-                                        )
-                                        Spacer(Modifier.width(3.dp))
-                                        Text(
-                                            text = video.playCountText,
-                                            fontSize = metrics.statFontSize,
-                                            lineHeight = metrics.statLineHeight,
-                                            color = statsColor,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    if (metrics.showDanmakuOnCover && video.danmakuText.isNotBlank()) {
-                                        if (video.playCountText.isNotBlank()) {
-                                            Spacer(Modifier.width(metrics.statGap))
-                                        }
-                                        Icon(
-                                            imageVector = DanmakuStatIcon,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(metrics.statIconSize),
-                                            tint = statsColor,
-                                        )
-                                        Spacer(Modifier.width(3.dp))
-                                        Text(
-                                            text = video.danmakuText,
-                                            fontSize = metrics.statFontSize,
-                                            lineHeight = metrics.statLineHeight,
-                                            color = statsColor,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                                if (video.durationText.isNotBlank()) {
-                                    Text(
-                                        text = video.durationText,
-                                        fontSize = metrics.statFontSize,
-                                        lineHeight = metrics.statLineHeight,
-                                        color = statsColor,
-                                        maxLines = 1,
-                                    )
-                                }
-                            }
+                            )
                         }
                     }
 
@@ -410,6 +371,114 @@ internal fun FeedCard(
             items = cardMenuItems,
             preciseClickState = pressState,
         )
+    }
+}
+
+/** 封面底部统计排布：优先完整展示「播放 + 弹幕 + 时长」，放不下时整项隐去弹幕而非截成省略号。 */
+@Composable
+private fun CoverBottomStats(
+    playText: String,
+    danmakuText: String,
+    durationText: String,
+    color: Color,
+    metrics: FeedCardMetrics,
+    modifier: Modifier = Modifier,
+) {
+    if (playText.isBlank() && danmakuText.isBlank() && durationText.isBlank()) return
+    Layout(
+        modifier = modifier,
+        content = {
+            if (playText.isNotBlank() && danmakuText.isNotBlank()) {
+                Box(Modifier.layoutId("playDm")) {
+                    CoverStatGroup(playText, danmakuText, color, metrics)
+                }
+            }
+            if (playText.isNotBlank()) {
+                Box(Modifier.layoutId("playOnly")) {
+                    CoverStatGroup(playText, "", color, metrics)
+                }
+            } else if (danmakuText.isNotBlank()) {
+                Box(Modifier.layoutId("dmOnly")) {
+                    CoverStatGroup("", danmakuText, color, metrics)
+                }
+            }
+            if (durationText.isNotBlank()) {
+                Box(Modifier.layoutId("dur")) {
+                    Text(
+                        text = durationText,
+                        fontSize = metrics.statFontSize,
+                        lineHeight = metrics.statLineHeight,
+                        color = color,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+        },
+    ) { measurables, constraints ->
+        val gapPx = 6.dp.roundToPx()
+        val durPlaceable = measurables.firstOrNull { it.layoutId == "dur" }?.measure(Constraints())
+        val durWidth = durPlaceable?.width ?: 0
+        val leftBudget = (constraints.maxWidth - durWidth - if (durPlaceable != null) gapPx else 0).coerceAtLeast(0)
+        val fullLeft = measurables.firstOrNull { it.layoutId == "playDm" }
+            ?.measure(Constraints())
+            ?.takeIf { it.width <= leftBudget }
+        val finalLeft = fullLeft ?: (measurables.firstOrNull { it.layoutId == "playOnly" }
+            ?: measurables.firstOrNull { it.layoutId == "dmOnly" })
+            ?.measure(Constraints(maxWidth = leftBudget))
+        val height = maxOf(finalLeft?.height ?: 0, durPlaceable?.height ?: 0)
+        layout(constraints.maxWidth, height) {
+            finalLeft?.placeRelative(0, (height - finalLeft.height) / 2)
+            durPlaceable?.placeRelative(constraints.maxWidth - durWidth, (height - durPlaceable.height) / 2)
+        }
+    }
+}
+
+@Composable
+private fun CoverStatGroup(
+    playText: String,
+    danmakuText: String,
+    color: Color,
+    metrics: FeedCardMetrics,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (playText.isNotBlank()) {
+            Icon(
+                imageVector = COUIIcons.Play,
+                contentDescription = null,
+                modifier = Modifier.size(metrics.statIconSize),
+                tint = color,
+            )
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text = playText,
+                fontSize = metrics.statFontSize,
+                lineHeight = metrics.statLineHeight,
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (danmakuText.isNotBlank()) {
+            if (playText.isNotBlank()) Spacer(Modifier.width(metrics.statGap))
+            Icon(
+                imageVector = DanmakuStatIcon,
+                contentDescription = null,
+                modifier = Modifier.size(metrics.statIconSize),
+                tint = color,
+            )
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text = danmakuText,
+                fontSize = metrics.statFontSize,
+                lineHeight = metrics.statLineHeight,
+                color = color,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 @Composable

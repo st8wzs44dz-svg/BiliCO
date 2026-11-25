@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -50,17 +53,22 @@ import erl.bilico.di.AppContainer
 import erl.bilico.feature.comment.CommentComposerSheet
 import erl.bilico.feature.feed.FeedSegmentRowHeight
 import erl.bilico.ui.ExpandOrigin
+import erl.bilico.ui.LocalImageOriginRowKey
+import erl.bilico.ui.LocalImageOriginScope
 import erl.bilico.ui.NavState
 import erl.bilico.ui.TitleRowHeight
 import erl.bilico.ui.Route
 import erl.bilico.ui.asRowScrollState
+import erl.bilico.ui.rememberImageOriginScope
 import erl.bilico.ui.components.EmptyState
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.FullPageRefreshHoldMillis
 import erl.bilico.ui.components.FullPageRefreshTexts
 import erl.bilico.ui.components.LoadingState
+import erl.bilico.ui.components.RefreshDivider
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.pageContainerColor
+import erl.bilico.ui.topBarScrollPx
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.FullPagePullToRefresh
@@ -75,6 +83,26 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
 import kotlinx.coroutines.launch
 
+class DynamicScrollStates(
+    val all: LazyListState,
+    val video: LazyListState,
+    val live: LazyGridState,
+) {
+    internal fun scrollPxFor(filter: DynamicFilter): Float = when (filter) {
+        DynamicFilter.ALL -> all.topBarScrollPx()
+        DynamicFilter.VIDEO -> video.topBarScrollPx()
+        DynamicFilter.LIVE -> live.topBarScrollPx()
+    }
+}
+
+@Composable
+fun rememberDynamicScrollStates(): DynamicScrollStates {
+    val all = rememberLazyListState()
+    val video = rememberLazyListState()
+    val live = rememberLazyGridState()
+    return remember(all, video, live) { DynamicScrollStates(all, video, live) }
+}
+
 @Composable
 fun DynamicScreen(
     container: AppContainer,
@@ -85,6 +113,7 @@ fun DynamicScreen(
     pagerState: PagerState,
     onCollapse: (Float) -> Unit,
     refreshTick: Int,
+    scrollStates: DynamicScrollStates = rememberDynamicScrollStates(),
 ) {
     val account by container.session.account.collectAsStateWithLifecycle()
     val loggedIn = account != null
@@ -137,10 +166,12 @@ fun DynamicScreen(
                     active = pagerState.settledPage == page,
                     onCollapse = onCollapse,
                     refreshTick = refreshTick,
+                    gridState = scrollStates.live,
                 )
 
                 DynamicFilter.ALL, DynamicFilter.VIDEO -> {
                     val type = if (filter == DynamicFilter.ALL) DynamicFeedType.ALL else DynamicFeedType.VIDEO
+                    val tabListState = if (filter == DynamicFilter.ALL) scrollStates.all else scrollStates.video
                     // 每个筛选一份自己的列表：滑到对面那页时内容已经加载好，不会先空一下再重新拉。
                     val viewModel: DynamicViewModel = viewModel(key = "dynamic-${type.name}") {
                         DynamicViewModel(container.dynamic, container.session, type)
@@ -153,6 +184,7 @@ fun DynamicScreen(
                         state = state,
                         blocks = blocks,
                         viewModel = viewModel,
+                        listState = tabListState,
                         topInset = topInset,
                         active = pagerState.settledPage == page,
                         onCollapse = onCollapse,
@@ -218,6 +250,7 @@ private fun DynamicContent(
     state: DynamicUiState,
     blocks: erl.bilico.data.repository.BlockSnapshot,
     viewModel: DynamicViewModel,
+    listState: LazyListState,
     topInset: Dp,
     active: Boolean,
     onCollapse: (Float) -> Unit,
@@ -232,7 +265,6 @@ private fun DynamicContent(
     onDelete: (DynamicItemUi) -> Unit,
     onLike: (DynamicItemUi) -> Unit,
 ) {
-    val listState = rememberLazyListState()
     BindScrollToTop(listState, enabled = active)
     val scope = rememberCoroutineScope()
     val pullState = rememberFullPagePullToRefreshState()
@@ -340,20 +372,25 @@ private fun DynamicContent(
                 val freshItems = shown.items.take(inserted).filter { blocks.shouldShowDynamic(it) }
                 val olderItems = shown.items.drop(inserted).filter { blocks.shouldShowDynamic(it) }
                 val card: @Composable (DynamicItemUi) -> Unit = { item ->
-                    DynamicCard(
-                        item = item,
-                        onOpenUser = onOpenUser,
-                        onOpenVideo = onOpenVideo,
-                        onOpenImage = onOpenImage,
-                        onOpenDynamic = onOpenDynamic,
-                        onWatchLater = onWatchLater,
-                        onOpenLive = onOpenLive,
-                        currentMid = currentMid,
-                        onDelete = onDelete,
-                        onLike = onLike,
-                        rowScrollState = rowScrollState,
-                        rowKey = item.id,
-                    )
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalImageOriginScope provides rememberImageOriginScope(listState),
+                        LocalImageOriginRowKey provides item.id,
+                    ) {
+                        DynamicCard(
+                            item = item,
+                            onOpenUser = onOpenUser,
+                            onOpenVideo = onOpenVideo,
+                            onOpenImage = onOpenImage,
+                            onOpenDynamic = onOpenDynamic,
+                            onWatchLater = onWatchLater,
+                            onOpenLive = onOpenLive,
+                            currentMid = currentMid,
+                            onDelete = onDelete,
+                            onLike = onLike,
+                            rowScrollState = rowScrollState,
+                            rowKey = item.id,
+                        )
+                    }
                 }
 
                 items(
@@ -364,7 +401,12 @@ private fun DynamicContent(
 
                 if (inserted in 1 until shown.items.size) {
                     item(key = RefreshDividerKey) {
-                        RefreshDivider(onBackToTop = { scope.launch { listState.animateScrollToItem(0) } })
+                        RefreshDivider(
+                            onBackToTop = {
+                                viewModel.refresh()
+                                scope.launch { listState.animateScrollToItem(0) }
+                            },
+                        )
                     }
                 }
 
@@ -393,40 +435,6 @@ private fun DynamicContent(
             }
         }
 
-    }
-}
-
-/**
- * 动态流刷新后的拼接占位：提示这批新内容看完了，点一下滚回列表顶部。
- */
-@Composable
-private fun RefreshDivider(onBackToTop: () -> Unit) {
-    val scheme = COUITheme.colorScheme
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp),
-        insideMargin = PaddingValues(0.dp),
-        onClick = onBackToTop,
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "本次刷新的内容已看完",
-                fontSize = 12.sp,
-                color = scheme.onSurfaceSecondary,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "回到顶部",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = scheme.primary,
-            )
-        }
     }
 }
 

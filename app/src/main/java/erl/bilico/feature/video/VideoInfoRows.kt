@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import erl.bilico.ui.components.COUISmoothCapsuleShape
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -146,7 +145,7 @@ internal fun UpRow(
             }
         }
         Spacer(Modifier.width(10.dp))
-        FollowButton(following = following, onClick = onFollow)
+        erl.bilico.ui.components.FollowCapsuleButton(following = following, onClick = onFollow)
     }
 }
 
@@ -157,11 +156,19 @@ private fun upMetaText(followers: Long?, pubdate: Long): String = buildList {
 
 /** 视频标题与右上角更多操作按钮（从 UP 主行下移至此，避免挤压长 UP 主名字）。 */
 @Composable
-internal fun VideoTitleRow(detail: VideoDetail, expanded: Boolean) {
+internal fun VideoTitleRow(
+    detail: VideoDetail,
+    expanded: Boolean,
+    promotedBadge: Boolean = false,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
+        if (promotedBadge) {
+            erl.bilico.ui.components.PromotionBadge(fontSize = 11.sp)
+            Spacer(Modifier.width(4.dp))
+        }
         Text(
             text = detail.title,
             modifier = Modifier.weight(1f),
@@ -185,9 +192,9 @@ internal fun VideoTitleRow(detail: VideoDetail, expanded: Boolean) {
     }
 }
 
-/** 播放量行与简介之间的 BV 号行，点击直接复制 BV 号。 */
+/** 播放量行与简介之间的 BV 号行，点击直接复制 BV 号；商单标记挂在 BV 号右侧。 */
 @Composable
-internal fun VideoBvidRow(bvid: String) {
+internal fun VideoBvidRow(bvid: String, sponsorLabel: String? = null) {
     val context = LocalContext.current
     val metaColor = COUITheme.colorScheme.onSurfaceSecondary
     Row(
@@ -219,23 +226,11 @@ internal fun VideoBvidRow(bvid: String) {
                 tint = metaColor,
             )
         }
+        if (sponsorLabel != null) {
+            Spacer(Modifier.width(8.dp))
+            erl.bilico.ui.components.SponsorBadge(fontSize = 11.sp, text = sponsorLabel)
+        }
     }
-}
-
-@Composable
-private fun FollowButton(following: Boolean, onClick: () -> Unit) {
-    val scheme = COUITheme.colorScheme
-    Text(
-        text = if (following) "已关注" else "关注",
-        modifier = Modifier
-            .clip(COUISmoothCapsuleShape)
-            .background(if (following) scheme.surfaceContainer else scheme.primary)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 7.dp),
-        style = COUITheme.textStyles.footnote1,
-        fontWeight = FontWeight.Medium,
-        color = if (following) scheme.onSurfaceSecondary else scheme.onPrimary,
-    )
 }
 
 /**

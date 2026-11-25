@@ -11,6 +11,9 @@ internal object SettingsKeys {
     const val DEFAULT_LONG_PRESS_SPEED = 200
 
     val KEY_DARK_MODE = intPreferencesKey("dark_mode")
+    val KEY_ACCENT_COLOR = intPreferencesKey("accent_color")
+    val KEY_ACCENT_HYPERLINK = booleanPreferencesKey("accent_hyperlink")
+    val KEY_ME_ICON_COLOR_MODE = intPreferencesKey("me_icon_color_mode")
     val KEY_QUALITY = intPreferencesKey("default_quality")
     val KEY_CDN = stringPreferencesKey("playback_cdn")
     val KEY_FEED_SOURCE = intPreferencesKey("feed_source")
@@ -54,6 +57,8 @@ internal object SettingsKeys {
     val KEY_PREFER_SURFACE_VIEW = booleanPreferencesKey("prefer_surface_view")
     val KEY_PLAYER_CONIC_LIGHT = booleanPreferencesKey("player_conic_light")
     val KEY_SPONSOR_BLOCK_ENABLED = booleanPreferencesKey("sponsor_block_enabled")
+    val KEY_SPONSOR_BADGE_ENABLED = booleanPreferencesKey("sponsor_badge_enabled")
+    val KEY_PROMOTION_BADGE_ENABLED = booleanPreferencesKey("promotion_badge_enabled")
     val KEY_SPONSOR_SKIP_MODE = intPreferencesKey("sponsor_skip_mode")
     val KEY_SPONSOR_CATEGORIES = stringPreferencesKey("sponsor_categories")
     val KEY_SPONSOR_USER_ID = stringPreferencesKey("sponsor_block_user_id")

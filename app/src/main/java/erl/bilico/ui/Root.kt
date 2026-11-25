@@ -109,6 +109,8 @@ import erl.bilico.feature.search.SearchScreen
 import erl.bilico.feature.settings.AboutScreen
 import erl.bilico.feature.settings.BlockManagerScreen
 import erl.bilico.feature.settings.SettingsScreen
+import erl.bilico.feature.settings.StatsOverlaySettingsScreen
+import erl.bilico.feature.space.SpaceCollectionScreen
 import erl.bilico.feature.space.SpaceScreen
 import erl.bilico.feature.update.UpdateDialog
 import erl.bilico.feature.update.UpdateScreen
@@ -457,9 +459,11 @@ internal fun BiliCoRoot(
         )
 
         // 弹窗宿主：COUI 的 OverlayDialog 只往 LocalDialogStates 里登记，没有这个宿主就什么都不画。
+        // SurfaceView（HDR / 直播）画面不进 Compose 图层，录出来的 backdrop 会残缺或拖出条纹，此时直接退回不透明面板。
+        val suppressPopupBackdrop = topEntry?.hasSurfaceView == true
         Box(Modifier.fillMaxSize().zIndex(5f)) {
             CompositionLocalProvider(
-                LocalBackdrop provides if (BlurEffectsEnabled) rootBackdrop else null,
+                LocalBackdrop provides if (BlurEffectsEnabled && !suppressPopupBackdrop) rootBackdrop else null,
             ) {
                 COUIPopupHost()
             }
@@ -710,9 +714,19 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
             commentRootId = route.commentRootId,
             commentTargetId = route.commentTargetId,
             offline = route.offline,
+            promoted = route.promoted,
         )
         is Route.LiveRoom -> LiveRoomScreen(container, nav, route.roomId)
         is Route.Space -> SpaceScreen(nav, container, route.mid)
+        is Route.SpaceCollection -> SpaceCollectionScreen(
+            nav = nav,
+            container = container,
+            mid = route.mid,
+            collectionId = route.collectionId,
+            isSeason = route.isSeason,
+            title = route.title,
+            total = route.total,
+        )
         Route.History -> HistoryScreen(container, nav)
         Route.Favorites -> FavoriteFoldersScreen(container, nav)
         is Route.FavoriteFolder -> FavoriteFolderScreen(container, nav, route.mediaId, route.title)
@@ -721,6 +735,7 @@ private fun RouteContent(route: Route, nav: NavState, container: AppContainer) {
         Route.Following -> FollowingScreen(container, nav)
         Route.PublishedRecords -> PublishedRecordsScreen(container, nav)
         Route.Settings -> SettingsScreen(container, nav)
+        Route.StatsOverlaySettings -> StatsOverlaySettingsScreen(container, nav)
         Route.BlockManager -> BlockManagerScreen(container, nav)
         Route.About -> AboutScreen(container, nav)
         is Route.Pgc -> BiliCoTheme(darkMode = 2) {

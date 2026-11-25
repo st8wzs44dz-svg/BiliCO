@@ -31,12 +31,15 @@ import erl.bilico.feature.comment.ReplyDetailOverlay
 import erl.bilico.feature.comment.ReplyThreadController
 import erl.bilico.feature.comment.rememberCommentViewModel
 import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.LocalTopBarBounds
 import erl.bilico.ui.NavState
 import erl.bilico.ui.PinnedBarDensity
 import erl.bilico.ui.Route
+import erl.bilico.ui.TopBarBounds
 import erl.bilico.ui.components.LocalCommentSeek
 import erl.bilico.ui.layerBackdropIf
 import erl.bilico.ui.pageContainerColor
+import erl.bilico.ui.reportTopBarBottom
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.FloatingActionButton
@@ -98,6 +101,8 @@ internal fun VideoDetailSection(
     backEnabled: Boolean = true,
     commentRootId: Long = 0L,
     commentTargetId: Long = 0L,
+    sponsorLabel: String? = null,
+    promotedBadge: Boolean = false,
 ) {
     val navBarBottom = rememberStableNavBarBottomDp()
     val fallbackBackdrop = rememberLayerBackdrop()
@@ -129,6 +134,8 @@ internal fun VideoDetailSection(
     // 停在顶部时栏下面没有东西会滚过去，这时候开着模糊只会把第一行的上沿糊出软边；
     // 等列表真的滚起来再启用。
     val barBlurActive = blurActive && rememberBarScrolled(detailPager.currentPage, infoListState, commentListState)
+    val detailBarBounds = remember { TopBarBounds() }
+    CompositionLocalProvider(LocalTopBarBounds provides detailBarBounds) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -188,6 +195,8 @@ internal fun VideoDetailSection(
                             val keyword = tag.trim()
                             if (keyword.isNotEmpty()) nav.push(Route.Search(keyword))
                         },
+                        sponsorLabel = sponsorLabel,
+                        promotedBadge = promotedBadge,
                         modifier = Modifier.fillMaxSize(),
                     )
                     if (nav.playQueue.items.isNotEmpty()) {
@@ -251,7 +260,8 @@ internal fun VideoDetailSection(
         DetailBarGlassSurface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .reportTopBarBottom(detailBarBounds),
             containerColor = pageBg,
             backdrop = if (BlurEffectsEnabled && barBlurActive) detailLayerBackdrop else null,
             materialBackdrop = if (BlurEffectsEnabled && barBlurActive) barMaterialBackdrop else null,
@@ -297,5 +307,6 @@ internal fun VideoDetailSection(
                 )
             }
         }
+    }
     }
 }

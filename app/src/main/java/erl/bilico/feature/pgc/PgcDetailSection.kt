@@ -36,11 +36,14 @@ import erl.bilico.feature.video.rememberStableNavBarBottomDp
 import erl.bilico.feature.video.rememberStableStatusBarHeightPx
 import erl.bilico.ui.BangumiCinemaBackground
 import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.LocalTopBarBounds
 import erl.bilico.ui.NavState
 import erl.bilico.ui.Route
+import erl.bilico.ui.TopBarBounds
 import erl.bilico.ui.components.EmptyState
 import erl.bilico.ui.components.LocalCommentSeek
 import erl.bilico.ui.layerBackdropIf
+import erl.bilico.ui.reportTopBarBottom
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -109,7 +112,9 @@ internal fun PgcDetailSection(
         remember(model) { model.state.map { it.total.toLong() }.distinctUntilChanged() }
             .collectAsStateWithLifecycle(initialValue = model.state.value.total.toLong()).value
     } ?: 0L
+    val detailBarBounds = remember { TopBarBounds() }
 
+    CompositionLocalProvider(LocalTopBarBounds provides detailBarBounds) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -174,7 +179,8 @@ internal fun PgcDetailSection(
         DetailBarGlassSurface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .reportTopBarBottom(detailBarBounds),
             containerColor = pageBg,
             backdrop = if (BlurEffectsEnabled && barBlurActive) detailLayerBackdrop else null,
             materialBackdrop = if (BlurEffectsEnabled && barBlurActive) barMaterialBackdrop else null,
@@ -219,6 +225,7 @@ internal fun PgcDetailSection(
                 )
             }
         }
+    }
     }
 }
 

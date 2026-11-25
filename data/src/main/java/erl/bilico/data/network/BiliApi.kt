@@ -62,6 +62,12 @@ import erl.bilico.data.model.SearchSquareResponse
 import erl.bilico.data.model.SearchSuggestResponse
 import erl.bilico.data.model.SearchTypeResponse
 import erl.bilico.data.model.SpaceInfoResponse
+import erl.bilico.data.model.SpaceLikedVideosResponse
+import erl.bilico.data.model.SpaceLiveRoomOldResponse
+import erl.bilico.data.model.SpaceOpusFeedResponse
+import erl.bilico.data.model.SpaceSeasonArchivesResponse
+import erl.bilico.data.model.SpaceSeasonsSeriesResponse
+import erl.bilico.data.model.SpaceSeriesArchivesResponse
 import erl.bilico.data.model.SpaceVideoResponse
 import erl.bilico.data.model.UpStatResponse
 import erl.bilico.data.model.UploadBfsResponse
@@ -294,8 +300,26 @@ interface BiliApi {
     @GET("x/space/wbi/acc/info")
     suspend fun spaceInfo(@QueryMap params: Map<String, String>): SpaceInfoResponse
 
+    @GET("https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld")
+    suspend fun spaceLiveRoom(@Query("mid") mid: Long): SpaceLiveRoomOldResponse
+
     @GET("x/space/wbi/arc/search")
     suspend fun spaceVideos(@QueryMap params: Map<String, String>): SpaceVideoResponse
+
+    @GET("x/polymer/web-space/home/seasons_series")
+    suspend fun spaceSeasonsSeries(@QueryMap params: Map<String, String>): SpaceSeasonsSeriesResponse
+
+    @GET("x/polymer/web-space/seasons_archives_list")
+    suspend fun spaceSeasonArchives(@QueryMap params: Map<String, String>): SpaceSeasonArchivesResponse
+
+    @GET("x/series/archives")
+    suspend fun spaceSeriesArchives(@QueryMap params: Map<String, String>): SpaceSeriesArchivesResponse
+
+    @GET("x/space/like/video")
+    suspend fun spaceLikedVideos(@Query("vmid") mid: Long): SpaceLikedVideosResponse
+
+    @GET("x/polymer/web-dynamic/v1/opus/feed/space")
+    suspend fun spaceOpusFeed(@QueryMap params: Map<String, String>): SpaceOpusFeedResponse
 
     @GET("x/relation/stat")
     suspend fun relationStat(@Query("vmid") mid: Long): RelationStatResponse
@@ -357,10 +381,13 @@ interface BiliApi {
     @POST("pgc/web/follow/del")
     suspend fun unfollowBangumi(@FieldMap fields: Map<String, String>): BaseResponse
 
-    // ---------- 排行榜 ----------
+    // ---------- 排行榜与热门 ----------
 
     @GET("x/web-interface/ranking/v2")
     suspend fun ranking(@QueryMap params: Map<String, String>): RankingResponse
+
+    @GET("x/web-interface/popular")
+    suspend fun popular(@QueryMap params: Map<String, String>): RankingResponse
 
     // ---------- 相关推荐 ----------
 
@@ -480,12 +507,13 @@ interface BiliApi {
     suspend fun imFetchMsgs(@QueryMap params: Map<String, String>): ImFetchMsgsResponse
 
     @FormUrlEncoded
-    @POST("https://api.vc.bilibili.com/session_svr/v1/session_svr/update_ack")
-    suspend fun imUpdateAck(@FieldMap params: Map<String, String>): BaseResponse
-
-    @FormUrlEncoded
     @POST("https://api.vc.bilibili.com/web_im/v1/web_im/send_msg")
     suspend fun imSendMsg(@FieldMap params: Map<String, String>): ImSendMsgResponse
+
+    /** 把会话已读位置推进到 `ack_seqno`，服务端的私信未读数随之下降。 */
+    @FormUrlEncoded
+    @POST("https://api.vc.bilibili.com/session_svr/v1/session_svr/update_ack")
+    suspend fun imUpdateAck(@FieldMap params: Map<String, String>): BaseResponse
 
     @GET("https://api.vc.bilibili.com/vote_svr/v1/vote_svr/vote_info")
     suspend fun voteInfo(@Query("vote_id") voteId: Long): VoteInfoResponse

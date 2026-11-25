@@ -36,6 +36,10 @@ internal class SponsorBlockController(
     var segments: List<SponsorSegment> by mutableStateOf(emptyList())
         private set
 
+    /** 社区把整条视频标成了商单（`actionType=full`），比只标了部分片段更确定。 */
+    var fullSponsorMark: Boolean by mutableStateOf(false)
+        private set
+
     var promptSegment: SponsorSegment? by mutableStateOf(null)
         private set
 
@@ -70,9 +74,21 @@ internal class SponsorBlockController(
             repository.skipSegments(bvid, cid)
                 .onSuccess { list ->
                     if (currentBvid == bvid && currentCid == cid) {
-                        segments = list
+                        applyFetchedSegments(list)
                     }
                 }
+        }
+    }
+
+    /** 整片标记只用来判定徽标，不参与跳过与进度条染色。 */
+    private fun applyFetchedSegments(list: List<SponsorSegment>) {
+        segments = list.filter { it.actionType != SponsorActionType.Full }
+        // 整片标记里只有赞助广告和「独家合作（免费/补贴拿到产品）」算商单；
+        // 自我推广是 UP 主推自己的东西，不能算恰饭。
+        fullSponsorMark = list.any {
+            it.actionType == SponsorActionType.Full &&
+                (it.category == SponsorCategory.Sponsor ||
+                    it.category == SponsorCategory.ExclusiveAccess)
         }
     }
 
@@ -82,6 +98,7 @@ internal class SponsorBlockController(
         currentBvid = ""
         currentCid = 0L
         segments = emptyList()
+        fullSponsorMark = false
         promptSegment = null
         undoNotice = null
         poiSegment = null
@@ -186,15 +203,21 @@ internal class SponsorBlockController(
     }
 
     /**
-     * 空降助手里的快捷跳转：跳到片段起点，并把它从自动跳过的候选里摘掉。
-     *
-     * 跳过类片段落在起点会立刻命中自动跳过判定，不标成已处理就等于原地弹回去。
+     * 空降助手里的快捷跳转：精彩时刻跳到标记点，其余跳过/静音类片段直接跳到片段结尾（跳过该段）。
      */
     fun jumpToSegment(player: Player, segment: SponsorSegment) {
-        if (segment.actionType == SponsorActionType.Skip) handledUuids.add(segment.uuid)
+        val isPoi = segment.actionType == SponsorActionType.Poi || segment.category == SponsorCategory.PoiHighlight
+        val targetMs = if (isPoi) {
+            dismissedPoiUuids.add(segment.uuid)
+            segment.startMs
+        } else {
+            handledUuids.add(segment.uuid)
+            restoreMuteIfNeeded(player)
+            segment.endMs
+        }
         promptSegment = null
         poiSegment = null
-        player.seekTo(segment.startMs)
+        player.seekTo(targetMs.coerceAtLeast(0L))
     }
 
     fun jumpToPoi(player: Player) {
@@ -269,7 +292,7 @@ internal class SponsorBlockController(
                 scope.launch {
                     repository.skipSegments(bvid, cid, bypassCache = true).onSuccess { refreshed ->
                         if (currentBvid == bvid && currentCid == cid && refreshed.isNotEmpty()) {
-                            segments = refreshed
+                            applyFetchedSegments(refreshed)
                         }
                     }
                 }

@@ -9,6 +9,9 @@ import erl.bilico.data.repository.CdnOption
 import erl.bilico.data.settings.SettingsKeys.DEFAULT_LONG_PRESS_SPEED
 import erl.bilico.data.settings.SettingsKeys.HISTORY_LIMIT
 import erl.bilico.data.settings.SettingsKeys.KEY_ACCEPT_PRERELEASE
+import erl.bilico.data.settings.SettingsKeys.KEY_ACCENT_COLOR
+import erl.bilico.data.settings.SettingsKeys.KEY_ACCENT_HYPERLINK
+import erl.bilico.data.settings.SettingsKeys.KEY_ME_ICON_COLOR_MODE
 import erl.bilico.data.settings.SettingsKeys.KEY_ADJUSTABLE_LONG_PRESS_SPEED
 import erl.bilico.data.settings.SettingsKeys.KEY_ADVANCED_PLUS_ONE
 import erl.bilico.data.settings.SettingsKeys.KEY_AUTO_CHECK_UPDATE
@@ -55,6 +58,8 @@ import erl.bilico.data.settings.SettingsKeys.KEY_SEARCH_HISTORY
 import erl.bilico.data.settings.SettingsKeys.KEY_SHOW_VIDEO_DISLIKE
 import erl.bilico.data.settings.SettingsKeys.KEY_SKIPPED_UPDATE
 import erl.bilico.data.settings.SettingsKeys.KEY_SPEED_LOCKED
+import erl.bilico.data.settings.SettingsKeys.KEY_PROMOTION_BADGE_ENABLED
+import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_BADGE_ENABLED
 import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_BLOCK_ENABLED
 import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_CATEGORIES
 import erl.bilico.data.settings.SettingsKeys.KEY_SPONSOR_SKIP_MODE
@@ -81,6 +86,18 @@ class SettingsRepository(
 
     private val _darkMode = MutableStateFlow(0)
     val darkMode: StateFlow<Int> = _darkMode.asStateFlow()
+
+    /** 主题强调色 ARGB；0 为默认，1 为 Jeb_ 动态循环，其余为 0xFFRRGGBB。 */
+    private val _accentColor = MutableStateFlow(0)
+    val accentColor: StateFlow<Int> = _accentColor.asStateFlow()
+
+    /** 是否将主题强调色应用到超链接文本（话题、@提及、网址与回复链接等）。 */
+    private val _accentHyperlink = MutableStateFlow(false)
+    val accentHyperlink: StateFlow<Boolean> = _accentHyperlink.asStateFlow()
+
+    /** 「我的」页面入口左侧图标配色模式：0 默认色（ColorOS 17 彩色），1 黑白色，2 强调色。 */
+    private val _meIconColorMode = MutableStateFlow(0)
+    val meIconColorMode: StateFlow<Int> = _meIconColorMode.asStateFlow()
 
     private val _defaultQuality = MutableStateFlow(DefaultQuality.P1080.id)
     val defaultQuality: StateFlow<Int> = _defaultQuality.asStateFlow()
@@ -199,9 +216,20 @@ class SettingsRepository(
     /** 自动连播下一条推荐视频时的弹窗与倒计时设置。 */
     val autoNext = AutoNextPreferences(context, scope)
 
+    /** 播放器视频统计信息浮窗配置。 */
+    val statsOverlay = StatsOverlayPreferences(context, scope)
+
     /** 空降助手（SponsorBlock）总开关与跳过模式：0 自动跳过，1 手动跳过，2 仅进度条标记。 */
     private val _sponsorBlockEnabled = MutableStateFlow(true)
     val sponsorBlockEnabled: StateFlow<Boolean> = _sponsorBlockEnabled.asStateFlow()
+
+    /** 在视频详情页标题后标注空降助手识别到的商单。 */
+    private val _sponsorBadgeEnabled = MutableStateFlow(true)
+    val sponsorBadgeEnabled: StateFlow<Boolean> = _sponsorBadgeEnabled.asStateFlow()
+
+    /** 在视频标题前标注推荐流下发的商业推广（小火箭）内容。 */
+    private val _promotionBadgeEnabled = MutableStateFlow(true)
+    val promotionBadgeEnabled: StateFlow<Boolean> = _promotionBadgeEnabled.asStateFlow()
 
     private val _sponsorSkipMode = MutableStateFlow(0)
     val sponsorSkipMode: StateFlow<Int> = _sponsorSkipMode.asStateFlow()
@@ -231,6 +259,9 @@ class SettingsRepository(
         scope.launch {
             val prefs = context.biliDataStore.data.first()
             _darkMode.value = prefs[KEY_DARK_MODE] ?: 0
+            _accentColor.value = normalizeAccentColor(prefs[KEY_ACCENT_COLOR] ?: 0)
+            _accentHyperlink.value = prefs[KEY_ACCENT_HYPERLINK] ?: false
+            _meIconColorMode.value = (prefs[KEY_ME_ICON_COLOR_MODE] ?: 0).coerceIn(0, 2)
             _defaultQuality.value = DefaultQuality.fromId(prefs[KEY_QUALITY] ?: DefaultQuality.P1080.id).id
             _cdnOption.value = CdnOption.fromId(prefs[KEY_CDN]).id
             _feedSource.value = (prefs[KEY_FEED_SOURCE] ?: 0).coerceIn(0, 1)
@@ -290,7 +321,10 @@ class SettingsRepository(
             playerTopBar.restore()
             feed.restore()
             autoNext.restore()
+            statsOverlay.restore()
             _sponsorBlockEnabled.value = prefs[KEY_SPONSOR_BLOCK_ENABLED] ?: true
+            _sponsorBadgeEnabled.value = prefs[KEY_SPONSOR_BADGE_ENABLED] ?: true
+            _promotionBadgeEnabled.value = prefs[KEY_PROMOTION_BADGE_ENABLED] ?: true
             _sponsorSkipMode.value = (prefs[KEY_SPONSOR_SKIP_MODE] ?: 0).coerceIn(0, 2)
             _sponsorCategories.value = prefs[KEY_SPONSOR_CATEGORIES]
                 ?.split(',')
@@ -339,6 +373,16 @@ class SettingsRepository(
     fun setSponsorBlockEnabled(enabled: Boolean) {
         _sponsorBlockEnabled.value = enabled
         scope.launch { context.biliDataStore.edit { it[KEY_SPONSOR_BLOCK_ENABLED] = enabled } }
+    }
+
+    fun setSponsorBadgeEnabled(enabled: Boolean) {
+        _sponsorBadgeEnabled.value = enabled
+        scope.launch { context.biliDataStore.edit { it[KEY_SPONSOR_BADGE_ENABLED] = enabled } }
+    }
+
+    fun setPromotionBadgeEnabled(enabled: Boolean) {
+        _promotionBadgeEnabled.value = enabled
+        scope.launch { context.biliDataStore.edit { it[KEY_PROMOTION_BADGE_ENABLED] = enabled } }
     }
 
     fun setSponsorSkipMode(mode: Int) {
@@ -634,6 +678,28 @@ class SettingsRepository(
     fun setDarkMode(mode: Int) {
         _darkMode.value = mode.coerceIn(0, 2)
         scope.launch { context.biliDataStore.edit { it[KEY_DARK_MODE] = _darkMode.value } }
+    }
+
+    fun setAccentColor(argb: Int) {
+        val normalized = normalizeAccentColor(argb)
+        _accentColor.value = normalized
+        scope.launch { context.biliDataStore.edit { it[KEY_ACCENT_COLOR] = normalized } }
+    }
+
+    fun setAccentHyperlink(enabled: Boolean) {
+        _accentHyperlink.value = enabled
+        scope.launch { context.biliDataStore.edit { it[KEY_ACCENT_HYPERLINK] = enabled } }
+    }
+
+    fun setMeIconColorMode(mode: Int) {
+        val resolved = mode.coerceIn(0, 2)
+        _meIconColorMode.value = resolved
+        scope.launch { context.biliDataStore.edit { it[KEY_ME_ICON_COLOR_MODE] = resolved } }
+    }
+
+    private fun normalizeAccentColor(argb: Int): Int = when (argb) {
+        0, 1 -> argb
+        else -> argb or 0xFF000000.toInt()
     }
 
     fun setDefaultQuality(quality: Int) {

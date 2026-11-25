@@ -13,11 +13,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -26,8 +23,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
@@ -49,7 +47,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -62,19 +59,21 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import erl.bilico.data.settings.HomeTabType
 import erl.bilico.di.AppContainer
 import erl.bilico.player.PlaybackBridge
 import erl.bilico.feature.dynamic.DynamicFilters
 import erl.bilico.feature.dynamic.DynamicPublishOverlay
 import erl.bilico.feature.dynamic.DynamicScreen
-import erl.bilico.feature.feed.FEED_SEGMENTS
+import erl.bilico.feature.dynamic.DynamicScrollStates
+import erl.bilico.feature.dynamic.rememberDynamicScrollStates
 import erl.bilico.feature.feed.FeedScreen
+import erl.bilico.feature.feed.FeedScrollStates
+import erl.bilico.feature.feed.rememberFeedScrollStates
 import erl.bilico.feature.me.MeScreen
 import erl.bilico.feature.me.ProfileEditHost
 import erl.bilico.feature.search.HomeSearchOverlay
@@ -83,13 +82,13 @@ import erl.bilico.feature.search.SearchViewModel
 import erl.bilico.feature.search.showingResults
 import io.github.suqi8.coui.kmp.anim.COUIInEase
 import io.github.suqi8.coui.kmp.anim.COUIOutEase
+import io.github.suqi8.coui.kmp.basic.AppBarBlurOverlayDefaults
 import io.github.suqi8.coui.kmp.basic.LocalEdgeToEdge
 import io.github.suqi8.coui.kmp.basic.LocalPlatformBottomBarMaterialEnabled
 import io.github.suqi8.coui.kmp.basic.TabRowWithContour
 import io.github.suqi8.coui.kmp.basic.rememberSearchResultsTransitionState
 import io.github.suqi8.coui.kmp.blur.LocalBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
-import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -215,9 +214,22 @@ fun MainShell(nav: NavState, container: AppContainer) {
     val account by container.session.account.collectAsStateWithLifecycle()
     var dynamicComposerOpen by remember { mutableStateOf(false) }
     var editProfileOpen by remember { mutableStateOf(false) }
+    val homeTabsLayout by container.settings.feed.homeTabs.collectAsStateWithLifecycle()
+    val feedTabs = remember(homeTabsLayout) { homeTabsLayout.visibleTabs() }
+    val feedTabLabels = remember(feedTabs) { feedTabs.map { it.label } }
     var segment by rememberSaveable { mutableIntStateOf(0) }
-    val feedPager = rememberPagerState(initialPage = segment, pageCount = { FEED_SEGMENTS.size })
+    LaunchedEffect(feedTabs.size) {
+        if (segment >= feedTabs.size) segment = (feedTabs.size - 1).coerceAtLeast(0)
+    }
+    val feedPager = rememberPagerState(
+        initialPage = segment.coerceIn(0, (feedTabs.size - 1).coerceAtLeast(0)),
+        pageCount = { feedTabs.size },
+    )
     val dynamicPager = rememberPagerState(initialPage = dynamicFilterIndex, pageCount = { DynamicFilters.size })
+    val feedScrollStates = rememberFeedScrollStates()
+    val dynamicScrollStates = rememberDynamicScrollStates()
+    val meListState = rememberLazyListState()
+    val searchListState = rememberLazyListState()
 
     val titleHeightPx = with(LocalDensity.current) { TitleRowHeight.toPx() }
     val collapsePx = when (tab) {
@@ -259,16 +271,30 @@ fun MainShell(nav: NavState, container: AppContainer) {
 
     val userIsDark = isDarkTheme(userDarkMode)
     val userPageBg = pageContainerColor()
+    val bangumiTabIndex = remember(feedTabs) { feedTabs.indexOf(HomeTabType.BANGUMI) }
     val tabBangumiWeight = animateFloatAsState(
-        targetValue = if (tab == FEED_TAB_INDEX && !feedPanelCovering) 1f else 0f,
+        targetValue = if (tab == FEED_TAB_INDEX && !feedPanelCovering && bangumiTabIndex >= 0) 1f else 0f,
         animationSpec = tween(MainTabFadeMillis),
         label = "bangumiTabWeight",
     )
     val shellScope = rememberCoroutineScope()
     var segmentTapDriven by remember { mutableStateOf(false) }
-    var segmentTapCurrent by remember { mutableFloatStateOf(if (segment == 2) 1f else 0f) }
-    val segmentTapProgress = remember { Animatable(if (segment == 2) 1f else 0f) }
+    var segmentTapCurrent by remember {
+        mutableFloatStateOf(if (bangumiTabIndex >= 0 && segment == bangumiTabIndex) 1f else 0f)
+    }
+    val segmentTapProgress = remember {
+        Animatable(if (bangumiTabIndex >= 0 && segment == bangumiTabIndex) 1f else 0f)
+    }
     var segmentTapJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(bangumiTabIndex) {
+        segmentTapJob?.cancel()
+        segmentTapJob = null
+        segmentTapDriven = false
+        val snapped = if (bangumiTabIndex >= 0 && segment == bangumiTabIndex) 1f else 0f
+        segmentTapCurrent = snapped
+        segmentTapProgress.snapTo(snapped)
+    }
 
     LaunchedEffect(feedPager) {
         feedPager.interactionSource.interactions.collect { interaction ->
@@ -282,17 +308,21 @@ fun MainShell(nav: NavState, container: AppContainer) {
 
     // 滑动/惯性阶段直接由 visiblePagesInfo 的真实像素位移还原连续页位置，
     // 规避 PagerState 在 animateScrollToPage / 惯性松手瞬间先把 currentPage 跳到目标页并把 offsetFraction 夹在 ±0.5 导致的硬切；
-    // 点击顶栏分段胶囊（尤其跨页 0 <-> 2）则由独立的 segmentTapProgress 全程平滑过渡。
+    // 点击顶栏分段胶囊（尤其跨页切到番剧）则由独立的 segmentTapProgress 全程平滑过渡。
     val pagerBangumiProgress: () -> Float = {
-        val layoutInfo = feedPager.layoutInfo
-        val pageSize = layoutInfo.pageSize
-        val firstVisible = layoutInfo.visiblePagesInfo.firstOrNull()
-        val pagePos = if (pageSize > 0 && firstVisible != null) {
-            firstVisible.index - firstVisible.offset.toFloat() / pageSize.toFloat()
+        if (bangumiTabIndex < 0) {
+            0f
         } else {
-            feedPager.currentPage + feedPager.currentPageOffsetFraction
+            val layoutInfo = feedPager.layoutInfo
+            val pageSize = layoutInfo.pageSize
+            val firstVisible = layoutInfo.visiblePagesInfo.firstOrNull()
+            val pagePos = if (pageSize > 0 && firstVisible != null) {
+                firstVisible.index - firstVisible.offset.toFloat() / pageSize.toFloat()
+            } else {
+                feedPager.currentPage + feedPager.currentPageOffsetFraction
+            }
+            (1f - abs(pagePos - bangumiTabIndex.toFloat())).coerceIn(0f, 1f)
         }
-        (1f - abs(pagePos - 2f)).coerceIn(0f, 1f)
     }
     val rawBangumiProgress: () -> Float = {
         if (segmentTapDriven) segmentTapCurrent else pagerBangumiProgress()
@@ -303,7 +333,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
     val onCapsuleSegment: (Int) -> Unit = { target ->
         if (target != segment || segmentTapDriven) {
             val startProgress = rawBangumiProgress()
-            val targetProgress = if (target == 2) 1f else 0f
+            val targetProgress = if (bangumiTabIndex >= 0 && target == bangumiTabIndex) 1f else 0f
             segmentTapJob?.cancel()
             segmentTapCurrent = startProgress
             segmentTapDriven = true
@@ -329,19 +359,19 @@ fun MainShell(nav: NavState, container: AppContainer) {
             }
         }
     }
-    val baseChromeVisible = remember(feedPager, userIsDark) {
+    val baseChromeVisible = remember(feedPager, userIsDark, bangumiTabIndex) {
         derivedStateOf { userIsDark || bangumiProgress() < 0.999f }
     }
-    val darkChromeVisible = remember(feedPager, userIsDark) {
+    val darkChromeVisible = remember(feedPager, userIsDark, bangumiTabIndex) {
         derivedStateOf { !userIsDark && bangumiProgress() > 0.001f }
     }
     // 状态栏图标反色等滑动与胶囊点击过渡停稳后再同步，避免动画最敏感帧触发 SystemUI Binder IPC 与全局重组。
-    LaunchedEffect(nav, feedPager, tab, feedPanelCovering) {
+    LaunchedEffect(nav, feedPager, tab, feedPanelCovering, bangumiTabIndex) {
         snapshotFlow {
             when {
-                tab != FEED_TAB_INDEX || feedPanelCovering -> false
+                tab != FEED_TAB_INDEX || feedPanelCovering || bangumiTabIndex < 0 -> false
                 feedPager.isScrollInProgress || segmentTapDriven -> null
-                else -> feedPager.settledPage == 2
+                else -> feedPager.settledPage == bangumiTabIndex
             }
         }
             .distinctUntilChanged()
@@ -356,7 +386,8 @@ fun MainShell(nav: NavState, container: AppContainer) {
     val baseChromeAlpha: () -> Float = { if (userIsDark) 1f else (1f - bangumiProgress()) }
     val darkChromeAlpha: () -> Float = bangumiProgress
     // 顶栏/底栏边界与融合球落点仅在分页停稳后切换上报方，拖动与胶囊过渡全程不触发 MainShell 重组。
-    val settledBangumi = !userIsDark && tab == FEED_TAB_INDEX && segment == 2 && !segmentTapDriven && !feedPanelCovering
+    val settledBangumi = !userIsDark && tab == FEED_TAB_INDEX && bangumiTabIndex >= 0 &&
+        segment == bangumiTabIndex && !segmentTapDriven && !feedPanelCovering
     val baseReportsBounds = !settledBangumi
     val darkReportsBounds = settledBangumi
 
@@ -389,12 +420,14 @@ fun MainShell(nav: NavState, container: AppContainer) {
                                 container = container,
                                 nav = nav,
                                 topInset = topBarHeight,
+                                tabs = feedTabs,
                                 segment = segment,
                                 onSegment = { segment = it },
                                 onCollapse = { feedCollapse = it },
                                 pagerState = feedPager,
                                 refreshTick = feedRefreshTick,
                                 primaryTapTick = feedPrimaryTapTick,
+                                scrollStates = feedScrollStates,
                             )
 
                             1 -> DynamicScreen(
@@ -406,12 +439,14 @@ fun MainShell(nav: NavState, container: AppContainer) {
                                 pagerState = dynamicPager,
                                 onCollapse = { dynamicCollapse = it },
                                 refreshTick = dynamicRefreshTick,
+                                scrollStates = dynamicScrollStates,
                             )
 
                             else -> MeScreen(
                                 container = container,
                                 nav = nav,
                                 topInset = topBarHeight,
+                                listState = meListState,
                             )
                         }
                     }
@@ -429,10 +464,17 @@ fun MainShell(nav: NavState, container: AppContainer) {
                     PinnedBarDensity {
                         MainBarUnderlay(
                             tab = tab,
+                            loggedIn = account != null,
                             collapsed = collapsed,
+                            feedTabs = feedTabs,
+                            feedTabLabels = feedTabLabels,
+                            feedPager = feedPager,
+                            feedScrollStates = feedScrollStates,
                             feedSelectedSegment = if (segmentTapDriven) segment else feedPager.targetPage,
                             onSegment = onCapsuleSegment,
                             dynamicPager = dynamicPager,
+                            dynamicScrollStates = dynamicScrollStates,
+                            meListState = meListState,
                             onDynamicFilter = { dynamicFilterIndex = it },
                             onFeedReselect = { feedRefreshTick++ },
                             onDynamicReselect = { dynamicRefreshTick++ },
@@ -538,6 +580,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
                 barBounds = topBarBounds,
                 onSelectKeyword = submitHomeSearch,
                 modifier = Modifier.fillMaxSize(),
+                listState = searchListState,
             )
         }
 
@@ -565,6 +608,7 @@ fun MainShell(nav: NavState, container: AppContainer) {
                     LocalEdgeToEdge provides true,
                 ) {
                     PinnedBarDensity {
+                        val searchBarDensity = LocalDensity.current
                         MainTitleRow(
                             tab = tab,
                             nav = nav,
@@ -584,7 +628,9 @@ fun MainShell(nav: NavState, container: AppContainer) {
                                 if (account == null) Toast.makeText(context, "登录后可用", Toast.LENGTH_SHORT).show()
                                 else editProfileOpen = true
                             },
-                            panelAlpha = { panelAlpha.value },
+                            panelAlpha = {
+                                panelAlpha.value * AppBarBlurOverlayDefaults.scrollAlpha(searchListState.topBarScrollPx(), searchBarDensity)
+                            },
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .fillMaxWidth()
@@ -687,10 +733,17 @@ private fun Modifier.chromeLayerVisibility(
 @Composable
 private fun MainBarUnderlay(
     tab: Int,
+    loggedIn: Boolean,
     collapsed: () -> Float,
+    feedTabs: List<HomeTabType>,
+    feedTabLabels: List<String>,
+    feedPager: PagerState,
+    feedScrollStates: FeedScrollStates,
     feedSelectedSegment: Int,
     onSegment: (Int) -> Unit,
     dynamicPager: PagerState,
+    dynamicScrollStates: DynamicScrollStates,
+    meListState: LazyListState,
     onDynamicFilter: (Int) -> Unit,
     onFeedReselect: () -> Unit,
     onDynamicReselect: () -> Unit,
@@ -702,12 +755,16 @@ private fun MainBarUnderlay(
     containerColor: Color,
     modifier: Modifier = Modifier,
 ) {
+    val density = LocalDensity.current
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val pageBarHeight = statusBarTop + TitleRowHeight
-    val titleHeightPx = with(LocalDensity.current) { TitleRowHeight.toPx() }
+    val titleHeightPx = with(density) { TitleRowHeight.toPx() }
     val doubleTap = Modifier.pointerInput(onDoubleTap) {
         detectTapGestures(onDoubleTap = { onDoubleTap() })
     }
+    val feedWeight = animateFloatAsState(if (tab == 0) 1f else 0f, tween(MainTabFadeMillis), label = "mainBarFeedWeight")
+    val dynamicWeight = animateFloatAsState(if (tab == 1) 1f else 0f, tween(MainTabFadeMillis), label = "mainBarDynamicWeight")
+    val meWeight = animateFloatAsState(if (tab == 2) 1f else 0f, tween(MainTabFadeMillis), label = "mainBarMeWeight")
 
     Box(modifier) {
         AppBarSurface(
@@ -716,7 +773,20 @@ private fun MainBarUnderlay(
                 .offset { IntOffset(0, 0) }
                 .then(if (panelCovering || !reportBounds) Modifier else Modifier.reportTopBarBottom(bounds)),
             containerColor = containerColor,
-            scrollFraction = { 1f },
+            scrollFraction = {
+                val feedAlpha = pagerTopBarScrollAlpha(feedPager, feedTabs.size, density) { idx ->
+                    feedTabs.getOrNull(idx)?.let { feedScrollStates.stateFor(it).topBarScrollPx() } ?: 0f
+                }
+                val dynamicAlpha = if (!loggedIn) 0f else {
+                    pagerTopBarScrollAlpha(dynamicPager, DynamicFilters.size, density) { idx ->
+                        DynamicFilters.getOrNull(idx)?.first?.let(dynamicScrollStates::scrollPxFor) ?: 0f
+                    }
+                }
+                val meAlpha = AppBarBlurOverlayDefaults.scrollAlpha(meListState.topBarScrollPx(), density)
+                (feedWeight.value * feedAlpha +
+                    dynamicWeight.value * dynamicAlpha +
+                    meWeight.value * meAlpha).coerceIn(0f, 1f)
+            },
         ) {
             Box(
                 Modifier
@@ -727,7 +797,7 @@ private fun MainBarUnderlay(
         }
 
         val capsuleLabels = when (tab) {
-            0 -> FEED_SEGMENTS
+            0 -> feedTabLabels
             1 -> DynamicFilters.map { it.second }
             else -> null
         }

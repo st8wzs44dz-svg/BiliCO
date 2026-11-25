@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import erl.bilico.data.model.EmoteImage
 import erl.bilico.data.util.Formatters
+import erl.bilico.ui.hyperlinkColor
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.theme.COUITheme
 
@@ -90,7 +91,7 @@ fun RichCommentText(
     selectable: Boolean = false,
     style: TextStyle = COUITheme.textStyles.body2,
     color: Color = COUITheme.colorScheme.onSurface,
-    prefixColor: Color = COUITheme.colorScheme.primary,
+    prefixColor: Color = hyperlinkColor(),
     maxLines: Int = Int.MAX_VALUE,
     onOpenUser: ((Long) -> Unit)? = null,
     onTextLayout: ((TextLayoutResult) -> Unit)? = null,

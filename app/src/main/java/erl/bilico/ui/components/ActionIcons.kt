@@ -134,41 +134,6 @@ internal val TopBarWatchLaterIcon: ImageVector by lazy {
     )
 }
 
-internal val TopBarDmSettingsIcon: ImageVector by lazy {
-    unifiedStrokeIcon(
-        name = "TopBarDmSettings",
-        paths = listOf(
-            roundedRectPath(4.4f, 5.6f, 15.2f, 12.8f, 3.2f),
-            "M8.4,10.0H15.6",
-            "M8.4,14.0H12.4",
-            circlePath(14.8f, 14.0f, 1.3f),
-        ),
-    )
-}
-
-internal val TopBarDmOnIcon: ImageVector by lazy {
-    unifiedStrokeIcon(
-        name = "TopBarDmOn",
-        paths = listOf(
-            roundedRectPath(4.4f, 5.6f, 15.2f, 12.8f, 3.2f),
-            "M8.2,10.0H15.8",
-            "M8.2,14.0H13.4",
-        ),
-    )
-}
-
-internal val TopBarDmOffIcon: ImageVector by lazy {
-    unifiedStrokeIcon(
-        name = "TopBarDmOff",
-        paths = listOf(
-            roundedRectPath(4.4f, 5.6f, 15.2f, 12.8f, 3.2f),
-            "M8.2,10.0H11.5",
-            "M8.2,14.0H12.8",
-            "M5.4,18.6L18.6,5.4",
-        ),
-    )
-}
-
 internal val TopBarCastIcon: ImageVector by lazy {
     unifiedStrokeIcon(
         name = "TopBarCast",
@@ -242,6 +207,33 @@ internal val TopBarMoreIcon: ImageVector by lazy {
             circlePath(6.6f, 12f, 0.7f),
             circlePath(12f, 12f, 0.7f),
             circlePath(17.4f, 12f, 0.7f),
+        ),
+    )
+}
+
+/** 统计信息浮窗图标（未开启态）：外框屏幕 + 右下角空心悬浮小窗。 */
+internal val FloatingWindowOutlineIcon: ImageVector by lazy {
+    unifiedStrokeIcon(
+        name = "FloatingWindowOutline",
+        paths = listOf(
+            roundedRectPath(3.6f, 4.8f, 16.8f, 14.4f, 3.2f),
+            roundedRectPath(10.8f, 11.0f, 6.8f, 5.4f, 1.4f),
+        ),
+    )
+}
+
+/** 统计信息浮窗图标（已开启态）：外框屏幕 + 右下角实心悬浮小窗。 */
+internal val FloatingWindowActiveIcon: ImageVector by lazy {
+    dualToneVector(
+        name = "FloatingWindowActive",
+        layers = listOf(
+            VectorLayer(
+                path = roundedRectPath(3.6f, 4.8f, 16.8f, 14.4f, 3.2f),
+                strokeWidth = UNIFIED_STROKE_WIDTH,
+            ),
+            VectorLayer(
+                path = roundedRectPath(10.4f, 10.6f, 7.2f, 5.8f, 1.6f),
+            ),
         ),
     )
 }

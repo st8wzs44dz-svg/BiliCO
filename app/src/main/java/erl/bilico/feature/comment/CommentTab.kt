@@ -23,12 +23,14 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.BottomFloatingAccessoryNavigationBarDefaults
 import io.github.suqi8.coui.kmp.basic.BottomFloatingNavigationBarDefaults
 import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -52,11 +55,17 @@ import erl.bilico.data.model.CommentSort
 import erl.bilico.data.model.DynamicImage
 import erl.bilico.di.AppContainer
 import erl.bilico.feature.dynamic.DynamicImageViewer
+import erl.bilico.ui.LocalImageOriginRowKey
+import erl.bilico.ui.LocalImageOriginScope
+import erl.bilico.ui.LocalTopBarBounds
 import erl.bilico.ui.PinnedBarDensity
+import erl.bilico.ui.TopBarBounds
 import erl.bilico.ui.components.EmptyState
 import erl.bilico.ui.components.ErrorState
 import erl.bilico.ui.components.LoadingState
 import erl.bilico.ui.components.navBottomPadding
+import erl.bilico.ui.rememberImageOriginScope
+import erl.bilico.ui.reportBottomBarTop
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CircularProgressIndicator
 import io.github.suqi8.coui.kmp.basic.FloatingActionButton
@@ -111,6 +120,14 @@ fun CommentTab(
     val visibleComments = remember(state.items, blocks) {
         state.items.mapNotNull { blocks.filterCommentTree(it) }
     }
+    val sortTransition = rememberSortCrossfadeTransition(
+        renderedSort = state.renderedSort,
+        items = visibleComments,
+        resetKey = "$type-$oid",
+        scrollIndexProvider = { listState.firstVisibleItemIndex },
+        scrollOffsetProvider = { listState.firstVisibleItemScrollOffset },
+    )
+    var headerHeightPx by remember { mutableIntStateOf(0) }
     val currentMid = account?.mid ?: container.session.mid()
     val flat = type == 1 // 视频和番剧评论共用的类型。
     val localThreadController = remember { ReplyThreadController() }
@@ -156,9 +173,23 @@ fun CommentTab(
             }
     }
 
-    androidx.compose.runtime.CompositionLocalProvider(LocalCommentTarget provides (oid to type)) {
+    val inheritedBarBounds = LocalTopBarBounds.current
+    val fallbackBarBounds = remember { TopBarBounds() }
+    val activeBarBounds = inheritedBarBounds ?: fallbackBarBounds
+    val imageOriginScope = rememberImageOriginScope(listState, activeBarBounds)
+
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalCommentTarget provides (oid to type),
+        LocalImageOriginScope provides imageOriginScope,
+    ) {
     Box(modifier) {
     Column(Modifier.fillMaxSize()) {
+        val listPadding = PaddingValues(
+            start = 12.dp,
+            top = topGap + topInset,
+            end = 12.dp,
+            bottom = 88.dp + bottomInset,
+        )
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -181,10 +212,10 @@ fun CommentTab(
                 }
             }
             when {
-                state.isLoading && state.items.isEmpty() ->
+                state.isLoading && sortTransition.currentItems.isEmpty() ->
                     LoadingState(Modifier.padding(top = topInset))
 
-                state.items.isEmpty() -> if (state.error != null) {
+                sortTransition.currentItems.isEmpty() -> if (state.error != null) {
                     ErrorState(
                         message = state.error.orEmpty(),
                         modifier = Modifier.padding(top = topInset),
@@ -194,113 +225,136 @@ fun CommentTab(
                     EmptyState("还没有评论", Modifier.padding(top = topInset))
                 }
 
-                else -> LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().scrollEndHaptic(),
-                    contentPadding = PaddingValues(
+                else -> {
+                    val effectiveListPadding = PaddingValues(
                         start = if (flat) 20.dp else 12.dp,
                         top = topInset + if (sortInToolbar) 8.dp else topGap,
                         end = if (flat) 20.dp else 12.dp,
                         bottom = 88.dp + bottomInset,
-                    ),
-                ) {
-                    if (!sortInToolbar) item(key = "header") {
-                        if (flat) {
-                            VideoCommentSortChips(state.sort, viewModel::selectSort)
-                        } else Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = if (state.sort == CommentSort.New) "最新评论" else "最热评论",
-                                style = COUITheme.textStyles.body1,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            CommentSortTabRow(
-                                sort = state.sort,
-                                onSelectSort = viewModel::selectSort,
-                            )
-                        }
-                    }
-                    itemsIndexed(visibleComments, key = { _, comment -> comment.id }, contentType = { _, _ -> "comment" }) { index, comment ->
-                        val commentRow: @Composable () -> Unit = {
-                            BiliCommentItem(
-                                comment = comment,
-                                onLike = {
-                                    if (!container.session.isLoggedIn()) {
-                                        viewModel.showMessage("请先登录")
-                                    } else {
-                                        viewModel.toggleLike(comment)
-                                    }
-                                },
-                                onDislike = {
-                                    if (!container.session.isLoggedIn()) {
-                                        viewModel.showMessage("请先登录")
-                                    } else {
-                                        viewModel.toggleDislike(comment)
-                                    }
-                                },
-                                onReply = {
-                                    if (!container.session.isLoggedIn()) {
-                                        viewModel.showMessage("请先登录")
-                                    } else {
-                                        composeTarget = ComposeTarget.Reply(comment)
-                                    }
-                                },
-                                onOpenReplies = {
-                                    threadController.open(it)
-                                },
-                                onOpenUser = onOpenUser,
-                                onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
-                                currentMid = currentMid,
-                                onDelete = { viewModel.deleteComment(comment) },
-                                onClick = { threadController.open(comment) },
-                                flat = flat,
-                                showDivider = flat && index < visibleComments.lastIndex,
-                            )
-                        }
-                        if (flat) {
-                            Box(Modifier.fillMaxWidth().padding(top = if (sortInToolbar) 8.dp else 12.dp)) { commentRow() }
-                        } else {
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                                insideMargin = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                                onClick = { threadController.open(comment) },
-                            ) { commentRow() }
-                        }
-                    }
-                    when {
-                        state.isLoadingMore -> item(key = "more") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    size = 18.dp,
-                                )
+                    )
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().scrollEndHaptic(),
+                        contentPadding = effectiveListPadding,
+                    ) {
+                        if (!sortInToolbar) item(key = "header") {
+                            Box(Modifier.fillMaxWidth().onSizeChanged { headerHeightPx = it.height }) {
+                                if (flat) {
+                                    VideoCommentSortChips(state.sort, viewModel::selectSort)
+                                } else Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = if (state.sort == CommentSort.New) "最新评论" else "最热评论",
+                                        style = COUITheme.textStyles.body1,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    CommentSortTabRow(
+                                        sort = state.sort,
+                                        onSelectSort = viewModel::selectSort,
+                                    )
+                                }
                             }
                         }
+                        val currentItems = sortTransition.currentItems
+                        itemsIndexed(currentItems, key = { _, comment -> comment.id }, contentType = { _, _ -> "comment" }) { index, comment ->
+                            CompositionLocalProvider(LocalImageOriginRowKey provides comment.id) {
+                                val commentRow: @Composable () -> Unit = {
+                                    BiliCommentItem(
+                                        comment = comment,
+                                        onLike = {
+                                            if (!container.session.isLoggedIn()) {
+                                                viewModel.showMessage("请先登录")
+                                            } else {
+                                                viewModel.toggleLike(comment)
+                                            }
+                                        },
+                                        onDislike = {
+                                            if (!container.session.isLoggedIn()) {
+                                                viewModel.showMessage("请先登录")
+                                            } else {
+                                                viewModel.toggleDislike(comment)
+                                            }
+                                        },
+                                        onReply = {
+                                            if (!container.session.isLoggedIn()) {
+                                                viewModel.showMessage("请先登录")
+                                            } else {
+                                                composeTarget = ComposeTarget.Reply(comment)
+                                            }
+                                        },
+                                        onOpenReplies = {
+                                            threadController.open(it)
+                                        },
+                                        onOpenUser = onOpenUser,
+                                        onOpenImage = { imgs, idx -> imageViewer = imgs to idx },
+                                        currentMid = currentMid,
+                                        onDelete = { viewModel.deleteComment(comment) },
+                                        onClick = { threadController.open(comment) },
+                                        flat = flat,
+                                        showDivider = flat && index < currentItems.lastIndex,
+                                    )
+                                }
+                                if (flat) {
+                                    Box(Modifier.fillMaxWidth().padding(top = if (sortInToolbar) 8.dp else 12.dp)) { commentRow() }
+                                } else {
+                                    // 灰底页面 → 白卡片 → 浅灰楼中楼，三层配色照微博评论那套来。
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 10.dp),
+                                        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                                        onClick = { threadController.open(comment) },
+                                    ) { commentRow() }
+                                }
+                            }
+                        }
+                        when {
+                            state.isLoadingMore -> item(key = "more") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        size = 18.dp,
+                                    )
+                                }
+                            }
 
-                        state.isEnd -> item(key = "end") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "没有更多评论了",
-                                    style = COUITheme.textStyles.footnote2,
-                                    color = COUITheme.colorScheme.onSurfaceSecondary,
-                                )
+                            state.isEnd -> item(key = "end") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = "没有更多评论了",
+                                        style = COUITheme.textStyles.footnote2,
+                                        color = COUITheme.colorScheme.onSurfaceSecondary,
+                                    )
+                                }
                             }
                         }
+                    }
+
+                    SortCrossfadeListOverlay(
+                        exitingItems = sortTransition.exitingItems,
+                        exitAlpha = sortTransition.exitAlpha,
+                        exitScrollIndex = sortTransition.exitScrollIndex,
+                        exitScrollOffset = sortTransition.exitScrollOffset,
+                        contentPadding = effectiveListPadding,
+                        spacerHeightsPx = if (sortInToolbar) emptyList() else listOf(headerHeightPx),
+                        key = { "exit-${it.id}" },
+                    ) { comment ->
+                        ExitCommentCard(comment = comment, currentMid = currentMid)
                     }
                 }
             }
@@ -351,6 +405,7 @@ fun CommentTab(
                             interactionSource = ballInteraction,
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
+                                .reportBottomBarTop(activeBarBounds)
                                 .padding(
                                     end = BottomFloatingAccessoryNavigationBarDefaults.PaddingHorizontal,
                                     bottom = (BottomFloatingNavigationBarDefaults.MinHeightWithoutPaddingVertical -

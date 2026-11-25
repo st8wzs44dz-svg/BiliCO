@@ -2,6 +2,7 @@ package erl.bilico.data.repository
 
 import erl.bilico.data.model.EmoteImage
 import erl.bilico.data.model.ImContentParser
+import erl.bilico.data.model.ImMessagePage
 import erl.bilico.data.model.ImMessageUi
 import erl.bilico.data.model.ImSessionUi
 import erl.bilico.data.model.UploadedPicture
@@ -105,7 +106,7 @@ class ImRepository(
             }
         }
 
-    suspend fun messages(talkerId: Long, endSeqno: Long = 0L): Result<Pair<List<ImMessageUi>, Boolean>> =
+    suspend fun messages(talkerId: Long, endSeqno: Long = 0L): Result<ImMessagePage> =
         withContext(Dispatchers.IO) {
             runCatching {
                 if (!session.isLoggedIn()) error("请先登录查看私信")
@@ -157,27 +158,24 @@ class ImRepository(
                     )
                 }.sortedBy { it.timestamp } // 按时间正序排列以便对话流展示
 
-                // 首次打开会话时向 B 站上报已读回执，清除服务端未读计数与会话红点。
-                if (endSeqno == 0L) {
-                    val ackSeqno = data.maxSeqno.takeIf { it > 0L }
+                ImMessagePage(
+                    messages = list,
+                    hasMore = data.hasMore == 1,
+                    maxSeqno = data.maxSeqno.takeIf { it > 0L }
                         ?: data.messages.maxOfOrNull { it.msgSeqno }
-                        ?: 0L
-                    if (ackSeqno > 0L) {
-                        markSessionRead(talkerId = talkerId, ackSeqno = ackSeqno)
-                    }
-                }
-
-                list to (data.hasMore == 1)
+                        ?: 0L,
+                )
             }
         }
 
+    /** 打开会话后把已读位置推到最新一条，并通知会话列表原地清除红点。 */
     suspend fun markSessionRead(
         talkerId: Long,
         ackSeqno: Long = 0L,
         sessionType: Int = 1,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            if (!session.isLoggedIn()) return@runCatching
+            if (talkerId <= 0L || !session.isLoggedIn()) return@runCatching
             val csrf = session.csrf()
             if (csrf.isBlank()) return@runCatching
             val form = buildMap {

@@ -54,6 +54,8 @@ import erl.bilico.ui.components.MailOutlineIcon
 import erl.bilico.ui.components.navBottomPadding
 import erl.bilico.ui.layerBackdropIf
 import erl.bilico.ui.pageContainerColor
+import erl.bilico.ui.rememberPagerTopBarScrollBehavior
+import erl.bilico.ui.topBarScrollPx
 import io.github.suqi8.coui.kmp.basic.BindScrollToTop
 import io.github.suqi8.coui.kmp.basic.ChipTabData
 import io.github.suqi8.coui.kmp.basic.ChipTabDefaults
@@ -94,6 +96,12 @@ fun MessageScreen(
         MESSAGE_TABS.indexOfFirst { it.kind == preferred }.coerceAtLeast(0)
     }
     val pagerState = rememberPagerState(initialPage = initialPageIndex) { MESSAGE_TABS.size }
+    val tabListStates = List(MESSAGE_TABS.size) { rememberLazyListState() }
+    val scrollBehavior = rememberPagerTopBarScrollBehavior(
+        pagerState = pagerState,
+        pageCount = MESSAGE_TABS.size,
+        scrollPxForPage = { idx -> tabListStates.getOrNull(idx)?.topBarScrollPx() ?: 0f },
+    )
     val scope = rememberCoroutineScope()
     val pageColor = pageContainerColor()
     val layerBackdrop = rememberLayerBackdrop()
@@ -149,6 +157,7 @@ fun MessageScreen(
         ) { index ->
             ScrollToTopPage(active = index == pagerState.settledPage) {
                 val kind = MESSAGE_TABS[index].kind
+                val tabListState = tabListStates[index]
                 if (kind == MessageKind.SESSION) {
                     SessionList(
                         state = state,
@@ -156,6 +165,7 @@ fun MessageScreen(
                         contentTop = headerHeight + 8.dp,
                         viewModel = viewModel,
                         nav = nav,
+                        listState = tabListState,
                     )
                 } else {
                     MessageList(
@@ -166,6 +176,7 @@ fun MessageScreen(
                         viewModel = viewModel,
                         nav = nav,
                         onNotice = { notice = it },
+                        listState = tabListState,
                     )
                 }
             }
@@ -208,6 +219,7 @@ fun MessageScreen(
                     showDivider = false,
                     gradientGlass = BlurEffectsEnabled,
                     gradientGlassExtraHeight = 16.dp,
+                    scrollBehavior = scrollBehavior,
                     navigationIcon = { BackIconButton(onClick = nav::pop) },
                     bottomContent = {
                         Box(
@@ -279,8 +291,8 @@ private fun MessageList(
     viewModel: MessageViewModel,
     nav: NavState,
     onNotice: (String) -> Unit,
+    listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState(),
 ) {
-    val listState = rememberLazyListState()
     BindScrollToTop(listState)
     val itemCount by rememberUpdatedState(state.items.size)
     val transitionSpec = SearchResultContainerDefaults.transitionSpec(

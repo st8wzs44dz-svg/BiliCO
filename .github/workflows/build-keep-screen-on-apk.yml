@@ -12,24 +12,15 @@ concurrency:
   group: build-preview-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  COUI_REF: 7135f75aa4346fa03e589e0e41235386f309bdd8
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           path: BiliCO
           persist-credentials: false
-      - name: Cache COUI 17 local repo
-        id: coui-cache
-        uses: actions/cache@v4
-        with:
-          path: coui/build/repository/local
-          key: coui17-local-repo-${{ env.COUI_REF }}-v1
       - name: Locate Android SDK
         id: android-sdk
         run: echo "root=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_OUTPUT"
@@ -40,36 +31,14 @@ jobs:
             ${{ steps.android-sdk.outputs.root }}/platforms/android-37
             ${{ steps.android-sdk.outputs.root }}/build-tools/36.0.0
           key: android-sdk-37-bt36-${{ runner.os }}-v1
-      - name: Checkout COUI 17
-        if: steps.coui-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: Costben/coui17
-          ref: ${{ env.COUI_REF }}
-          persist-credentials: false
-          path: coui
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Publish COUI 17 artifacts to local repo
-        if: steps.coui-cache.outputs.cache-hit != 'true'
-        working-directory: coui
-        run: |
-          ./gradlew --no-daemon --no-configuration-cache --stacktrace -ProllingSnapshot \
-            -x dokkaGeneratePublicationHtml -x dokkaGenerate \
-            :coui-core:publishAndroidPublicationToLocalRepository :coui-core:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-ui:publishAndroidPublicationToLocalRepository :coui-ui:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-icons:publishAndroidPublicationToLocalRepository :coui-icons:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-preference:publishAndroidPublicationToLocalRepository :coui-preference:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-squircle:publishAndroidPublicationToLocalRepository :coui-squircle:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-blur:publishAndroidPublicationToLocalRepository :coui-blur:publishKotlinMultiplatformPublicationToLocalRepository \
-            :coui-shader:publishAndroidPublicationToLocalRepository :coui-shader:publishKotlinMultiplatformPublicationToLocalRepository
-          find build/repository/local -name "*.aar" | head -30
       - name: Assemble unsigned preview APK
         working-directory: BiliCO
-        run: ./gradlew :app:assemblePreview --stacktrace
+        run: ./gradlew -Pcoui.useRemote=true :app:assemblePreview --stacktrace
       - name: Upload the unsigned APK
         uses: actions/upload-artifact@v4
         with:

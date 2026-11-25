@@ -122,6 +122,8 @@ internal fun VideoInfoTab(
     onSelectChapter: (VideoChapter) -> Unit = {},
     onOpenChapters: () -> Unit = {},
     onTagClick: (String) -> Unit = {},
+    sponsorLabel: String? = null,
+    promotedBadge: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -169,6 +171,8 @@ internal fun VideoInfoTab(
             onSelectChapter = onSelectChapter,
             onOpenChapters = onOpenChapters,
             onTagClick = onTagClick,
+            sponsorLabel = sponsorLabel,
+            promotedBadge = promotedBadge,
             modifier = modifier,
         )
     }
@@ -211,6 +215,8 @@ private fun InfoContent(
     onSelectChapter: (VideoChapter) -> Unit = {},
     onOpenChapters: () -> Unit = {},
     onTagClick: (String) -> Unit = {},
+    sponsorLabel: String? = null,
+    promotedBadge: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     // 标题与简介共用一次展开：点一下标题，标题放开的同时简介也跟着放开。
@@ -265,7 +271,11 @@ private fun InfoContent(
                     .clickable { expanded = !expanded }
                     .animateContentSize(),
             ) {
-                VideoTitleRow(detail = detail, expanded = expanded)
+                VideoTitleRow(
+                    detail = detail,
+                    expanded = expanded,
+                    promotedBadge = promotedBadge,
+                )
 
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -283,7 +293,7 @@ private fun InfoContent(
 
                 if (detail.bvid.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
-                    VideoBvidRow(bvid = detail.bvid)
+                    VideoBvidRow(bvid = detail.bvid, sponsorLabel = sponsorLabel)
                 }
 
                 if (desc.isNotEmpty()) {
