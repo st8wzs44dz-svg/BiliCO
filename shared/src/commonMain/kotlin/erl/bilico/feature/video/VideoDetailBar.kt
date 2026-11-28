@@ -1,0 +1,611 @@
+package erl.bilico.feature.video
+
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import erl.bilico.data.model.CommentSort
+import erl.bilico.data.util.Formatters
+import erl.bilico.feature.comment.CommentSortIcon
+import erl.bilico.feature.comment.commentSortDescription
+import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.components.CompactSendButton
+import erl.bilico.ui.components.DanmakuToggle
+import erl.bilico.ui.components.inputCapsuleGlass
+import erl.bilico.ui.pageContainerColor
+import io.github.suqi8.coui.kmp.anim.COUIMoveEase
+import io.github.suqi8.coui.kmp.anim.folmeSpring
+import io.github.suqi8.coui.kmp.basic.ChipTab
+import io.github.suqi8.coui.kmp.basic.ChipTabDefaults
+import io.github.suqi8.coui.kmp.basic.InputField
+import io.github.suqi8.coui.kmp.basic.SearchBar
+import io.github.suqi8.coui.kmp.basic.SearchBarDefaults
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.blur.Backdrop
+import io.github.suqi8.coui.kmp.blur.LayerBackdrop
+import io.github.suqi8.coui.kmp.blur.LocalBackdrop
+import io.github.suqi8.coui.kmp.blur.ProgressiveBlur
+import io.github.suqi8.coui.kmp.blur.isBlurEnabled
+import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.blur.progressiveTextureBlur
+import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlin.math.roundToInt
+
+/**
+ * 播放页标题栏下方的一条：左边「简介 / 评论」胶囊标签，右边弹幕输入胶囊。
+ *
+ * 标签直接用 COUI 的 [ChipTab]（ColorOS 17 的 chip tab）：选中项是一块带高光与焦散光的胶囊，
+ * 未选中只有文字；弹幕胶囊就是 COUI 的搜索框，去掉材质描边与底部焦散光。
+ * 点进去后标签收窄淡出、胶囊铺满整行，右端按搜索栏取消按钮的规格滑出「发送」。
+ */
+@Composable
+internal fun VideoDetailBar(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    commentCount: Long,
+    commentSort: CommentSort?,
+    onToggleCommentSort: () -> Unit,
+    danmakuEnabled: Boolean,
+    onToggleDanmaku: () -> Unit,
+    onOpenDanmakuSettings: (() -> Unit)? = null,
+    composing: Boolean,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onComposingChange: (Boolean) -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
+    backdrop: Backdrop? = LocalBackdrop.current,
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val scheme = COUITheme.colorScheme
+    val isDark = scheme.background.luminance() < 0.5f
+    val barBackdrop = if (BlurEffectsEnabled) backdrop else null
+    val fieldColors = SearchBarDefaults.searchBarColors(backgroundColor = Color.Transparent)
+
+    val commentCountText = remember(commentCount) {
+        if (commentCount > 0L) Formatters.formatStat(commentCount) else null
+    }
+    val density = LocalDensity.current
+    val minCapsulePx = with(density) { MIN_DANMAKU_CAPSULE_WIDTH.roundToPx() }
+    val baseGapPx = with(density) { DETAIL_BAR_GAP.roundToPx() }
+
+    val sortVisible = selected == 1 && commentSort != null
+    val sortReveal = animateFloatAsState(
+        targetValue = if (sortVisible) 1f else 0f,
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
+        label = "commentSortReveal",
+    )
+
+    // 标签收起的进度：宽度跟着收窄，同时整块淡出，收完后不留一条硬边。
+    val collapse by animateFloatAsState(
+        targetValue = if (composing) 1f else 0f,
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
+    )
+    // 右端补偿跟着「发送」的展开走同一段节奏，整段动画里行尾都咬住不动。
+    val actionSlack by animateDpAsState(
+        targetValue = if (composing) ACTION_END_SLACK else 0.dp,
+        animationSpec = tween(DETAIL_RESIZE_MILLIS, easing = COUIMoveEase),
+    )
+    Layout(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(DETAIL_BAR_HEIGHT)
+            .padding(horizontal = 12.dp),
+        content = {
+            Box(
+                modifier = Modifier
+                    .layoutId("tabs")
+                    .then(if (collapse > 0.001f) Modifier.clipToBounds() else Modifier),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = 1f - collapse
+                        translationX = -size.width * collapse
+                    },
+                ) {
+                    ChipTab("简介", selected == 0, onClick = { onSelect(0) }, backdrop = barBackdrop)
+                    VideoCommentChip(
+                        count = commentCountText,
+                        selected = selected == 1,
+                        sort = commentSort ?: CommentSort.Hot,
+                        sortEnabled = sortVisible && !composing,
+                        reveal = sortReveal,
+                        onSelect = { onSelect(1) },
+                        onToggleSort = onToggleCommentSort,
+                        backdrop = barBackdrop,
+                    )
+                }
+            }
+
+            SearchBar(
+                inputField = {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        InputField(
+                            query = draft,
+                            onQueryChange = onDraftChange,
+                            onSearch = {
+                                keyboard?.hide()
+                                onSend()
+                            },
+                            expanded = composing,
+                            onExpandedChange = onComposingChange,
+                            label = "",
+                            textStyle = COUITheme.textStyles.body2,
+                            colors = fieldColors,
+                            stroke = null,
+                            glowColor = null,
+                            backdrop = null,
+                            leadingIcon = { Spacer(Modifier.width(12.dp)) },
+                            trailingIcon = {
+                                DanmakuToggle(
+                                    enabled = danmakuEnabled,
+                                    onToggle = onToggleDanmaku,
+                                    onOpenSettings = onOpenDanmakuSettings,
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(DETAIL_CAPSULE_HEIGHT)
+                                .inputCapsuleGlass(
+                                    backdrop = barBackdrop,
+                                    isDark = isDark,
+                                    fallbackColor = scheme.surfaceContainer,
+                                ),
+                        )
+                        if (draft.isEmpty()) {
+                            Text(
+                                text = "发弹幕",
+                                style = COUITheme.textStyles.body2,
+                                color = scheme.onSurfaceSecondary,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(
+                                        start = 12.dp,
+                                        end = if (onOpenDanmakuSettings != null) 66.dp else 32.dp,
+                                    ),
+                            )
+                        }
+                    }
+                },
+                onExpandedChange = onComposingChange,
+                modifier = Modifier
+                    .layoutId("search")
+                    // outsideEndAction 槽位按旧的纯文字「取消」留了 4dp 起始 + 16dp 结尾的外边距，
+                    // 展开后整行右端会多空出 16dp。这里只把搜索栏多量出这一段，让它自己吃回去。
+                    .actionEndSlack(actionSlack),
+                insideMargin = DpSize(0.dp, 2.dp),
+                expanded = composing,
+                outsideEndAction = {
+                    CompactSendButton(
+                        text = "发送",
+                        onClick = {
+                            keyboard?.hide()
+                            onSend()
+                        },
+                        enabled = draft.isNotBlank(),
+                        height = DETAIL_CAPSULE_HEIGHT,
+                        containerColor = scheme.surfaceContainer,
+                        isDark = isDark,
+                        backdrop = barBackdrop,
+                    )
+                },
+            ) { }
+        },
+    ) { measurables, constraints ->
+        val totalW = constraints.maxWidth
+        val maxTabsW = (totalW - baseGapPx - minCapsulePx).coerceAtLeast(0)
+        val tabsMeasurable = measurables.first { it.layoutId == "tabs" }
+        val searchMeasurable = measurables.first { it.layoutId == "search" }
+
+        val fullTabsPlaceable = tabsMeasurable.measure(
+            Constraints(minWidth = 0, maxWidth = maxTabsW, minHeight = 0, maxHeight = constraints.maxHeight),
+        )
+        val visibleTabsW = (fullTabsPlaceable.width * (1f - collapse)).roundToInt().coerceAtLeast(0)
+        val currentGapPx = (baseGapPx * (1f - collapse)).roundToInt().coerceAtLeast(0)
+        val searchW = (totalW - visibleTabsW - currentGapPx).coerceAtLeast(0)
+        val searchPlaceable = searchMeasurable.measure(
+            Constraints(
+                minWidth = searchW,
+                maxWidth = searchW,
+                minHeight = 0,
+                maxHeight = constraints.maxHeight,
+            ),
+        )
+        val rowH = constraints.maxHeight
+        layout(totalW, rowH) {
+            if (visibleTabsW > 0) {
+                fullTabsPlaceable.placeRelative(
+                    x = 0,
+                    y = (rowH - fullTabsPlaceable.height) / 2,
+                )
+            }
+            searchPlaceable.placeRelative(
+                x = visibleTabsW + currentGapPx,
+                y = (rowH - searchPlaceable.height) / 2,
+            )
+        }
+    }
+}
+
+/** One COUI surface with separate tab and sort hit targets. */
+@Composable
+private fun VideoCommentChip(
+    count: String?,
+    selected: Boolean,
+    sort: CommentSort,
+    sortEnabled: Boolean,
+    reveal: State<Float>,
+    onSelect: () -> Unit,
+    onToggleSort: () -> Unit,
+    backdrop: Backdrop?,
+) {
+    val scheme = COUITheme.colorScheme
+    val tabLabel = if (count == null) "评论" else "评论 $count"
+    val textStyle = ChipTabDefaults.textStyle()
+    val sortInteractive by remember(reveal) { derivedStateOf { reveal.value >= 0.9f } }
+    val interactionSource = remember { MutableInteractionSource() }
+    val sortPressed by interactionSource.collectIsPressedAsState()
+    val sortIconScale = animateFloatAsState(
+        targetValue = if (sortEnabled && sortInteractive && sortPressed) 0.86f else 1f,
+        animationSpec = remember {
+            folmeSpring(damping = 1f, response = 0.3f, visibilityThreshold = 0.001f)
+        },
+        label = "commentSortPress",
+    )
+    Box {
+        ChipTab(
+            label = "",
+            selected = selected,
+            onClick = onSelect,
+            modifier = Modifier.matchParentSize().semantics { contentDescription = tabLabel },
+            backdrop = backdrop,
+        )
+        Layout(
+            modifier = Modifier.height(ChipTabDefaults.Height),
+            content = {
+                Row(
+                    modifier = Modifier.fillMaxHeight().clearAndSetSemantics {},
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "评论",
+                        style = textStyle,
+                        color = scheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (count != null) {
+                        Text(
+                            text = count,
+                            style = textStyle,
+                            color = scheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .graphicsLayer { alpha = ((reveal.value - 0.65f) / 0.35f).coerceIn(0f, 1f) }
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            enabled = sortEnabled && sortInteractive,
+                            role = Role.Button,
+                            onClick = onToggleSort,
+                        )
+                        .semantics { contentDescription = commentSortDescription(sort) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CommentSortIcon(
+                        sort = sort,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .graphicsLayer {
+                                scaleX = sortIconScale.value
+                                scaleY = sortIconScale.value
+                            },
+                    )
+                }
+            },
+        ) { measurables, constraints ->
+            val progress = reveal.value.coerceIn(0f, 1f)
+            val horizontalPadding = ChipTabDefaults.StartPadding.roundToPx()
+            val start = horizontalPadding.coerceAtMost(constraints.maxWidth / 2)
+            val desiredSlot = (30.dp.toPx() * progress).roundToInt()
+            val end = (ChipTabDefaults.EndPadding.roundToPx() - (desiredSlot * 8f / 30f).roundToInt())
+                .coerceIn(0, constraints.maxWidth - start)
+            val available = constraints.maxWidth - start - end
+            val slot = desiredSlot.coerceIn(0, available)
+            val height = constraints.maxHeight
+            val text = measurables[0].measure(Constraints(maxWidth = available - slot, maxHeight = height))
+            val icon = if (slot > 0) measurables[1].measure(Constraints.fixed(slot, height)) else null
+            val width = start + text.width + slot + end
+            layout(width, height) {
+                // The text row and the icon slot both center their contents across the full chip height.
+                text.placeRelative(start, 0)
+                icon?.placeRelative(start + text.width, 0)
+            }
+        }
+    }
+}
+
+private val DETAIL_BAR_GAP = 6.dp
+private val MIN_DANMAKU_CAPSULE_WIDTH = 124.dp
+
+/**
+ * 按 [slack] 多量出右侧宽度，但仍按原本的宽度上报。
+ *
+ * COUI 的 `outsideEndAction` 槽位在按钮后面固定垫了 16dp（`ActionEndPadding`），
+ * 那是给旧的纯文字「取消」算的。把胶囊「发送」塞进去，整行右端就比左端多空一截；
+ * 多量这 16dp 让搜索栏自己把这截吃回去，行尾重新对齐。
+ */
+internal fun Modifier.actionEndSlack(slack: Dp): Modifier =
+    layout { measurable, constraints ->
+        val extra = slack.roundToPx()
+        val placeable = if (extra == 0) {
+            measurable.measure(constraints)
+        } else {
+            measurable.measure(
+                constraints.copy(
+                    minWidth = constraints.minWidth + extra,
+                    maxWidth = constraints.maxWidth + extra,
+                ),
+            )
+        }
+        layout(constraints.maxWidth, placeable.height) { placeable.place(0, 0) }
+    }
+
+
+
+/** 弹幕输入框与发送按钮共用的紧凑高度；与 COUI-Kit ChipTab 32dp 一致 */
+internal val DETAIL_CAPSULE_HEIGHT = 32.dp
+
+/**
+ * 「简介 / 评论」标签栏的高度。
+ *
+ * 详情页把列表顶到整块区域的最上面，由这条栏浮在上面盖住滚过去的正文；
+ * 列表的顶部内边距要按这个高度留，静止时第一行才不会被栏压住。
+ */
+internal val DETAIL_BAR_HEIGHT = 44.dp
+
+/** 切换栏下沿到正文第一行之间的间距；栏本身是浮层，正文从这里开始就不会被压住。 */
+internal val DETAIL_CONTENT_GAP = 4.dp
+
+/** 列表滚过这段距离才算离开顶部，顶栏到这时才开始启用毛玻璃。 */
+private val DETAIL_BLUR_THRESHOLD = 8.dp
+
+/**
+ * 顶栏是否已经离开列表顶部。
+ *
+ * 停在顶部时栏下面没有内容会滚过去，这时候开着模糊只会把正文第一行的上沿糊出软边；
+ * 滚动起来再启用。只订阅一个布尔量，滑动过程中不会让整页重组。
+ */
+@Composable
+internal fun rememberBarScrolled(
+    page: Int,
+    infoList: LazyListState,
+    commentList: LazyListState,
+): Boolean {
+    val thresholdPx = with(LocalDensity.current) { DETAIL_BLUR_THRESHOLD.roundToPx() }
+    val scrolled = remember(page, infoList, commentList, thresholdPx) {
+        derivedStateOf {
+            val list = if (page == 0) infoList else commentList
+            list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > thresholdPx
+        }
+    }
+    return scrolled.value
+}
+
+/** COUI `SearchBar` 在 `outsideEndAction` 后面固定垫的 16dp，展开时补回来。 */
+internal val ACTION_END_SLACK = 16.dp
+
+/** COUI 搜索栏背景变形的时长，让标签收起与胶囊铺开同一条节奏。 */
+private const val DETAIL_RESIZE_MILLIS = 450
+
+/**
+ * 专为播放页「简介 / 评论」标签栏打造的超平滑毛玻璃材质容器：
+ *
+ * 1. 顶部无痕纯实色护航：
+ *    从顶部（y = 0）一直延伸覆盖至胶囊上半部（0.00f ~ 0.60f），底色保持 100% 纯实色（Alpha = 1.0f），
+ *    向上滚动的任何内容在到达胶囊上沿之前就已被实色完全彻底隐没遮挡；
+ *    与上方折叠顶栏（继续播放所在行）同为 pageContainerColor() 纯实色，两者视觉完全连为一体，
+ *    彻底消除顶栏与评论栏之间的任何横线、接缝与明暗凹槽。
+ *
+ * 2. 底部轻量羽化（刚好下来一点点）：
+ *    extraHeight 缩减为 8dp（总高 56dp，超出 32dp 胶囊底边仅 16dp），
+ *    在胶囊下方轻微自然羽化即完全归零，绝不遮挡大面积评论内容。
+ */
+@Composable
+internal fun DetailBarGlassSurface(
+    modifier: Modifier = Modifier,
+    containerColor: Color = pageContainerColor(),
+    backdrop: LayerBackdrop? = null,
+    materialBackdrop: LayerBackdrop? = null,
+    topInset: Dp = 0.dp,
+    extraHeight: Dp = 6.dp,
+    showTopRow: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    val isDark = containerColor.luminance() < 0.5f
+    val blurEnabled = BlurEffectsEnabled && isBlurEnabled() && backdrop != null
+    val density = LocalDensity.current
+    val extraHeightPx = with(density) { extraHeight.roundToPx() }
+    val topInsetPx = with(density) { topInset.roundToPx() }
+    val materialTopPx = if (showTopRow || topInset <= 0.dp) 0 else topInsetPx
+    val barOnlyHeight = DETAIL_BAR_HEIGHT + extraHeight
+    val totalHeight = topInset + barOnlyHeight
+    val isTwoRow = topInset > 0.dp
+    val blurStartFraction = remember(isTwoRow, showTopRow, topInset, totalHeight, barOnlyHeight) {
+        when {
+            !isTwoRow -> 0.65f
+            !showTopRow && barOnlyHeight > 0.dp -> (5.dp / barOnlyHeight).coerceIn(0f, 0.85f)
+            totalHeight > 0.dp -> ((topInset + 5.dp) / totalHeight).coerceIn(0f, 0.85f)
+            else -> 0.65f
+        }
+    }
+    val blurCurve = if (isTwoRow) 2.2f else 3f
+    val alphaMid = remember(isTwoRow, topInset, totalHeight) {
+        if (isTwoRow && totalHeight > 0.dp) (topInset / totalHeight).coerceIn(0.1f, 0.85f) else 0f
+    }
+    val engineBlurRadiusDp = remember(density) {
+        with(density) { (30f * 0.57735f / 0.45f).toDp().value }
+    }
+
+    val gradientBrush = remember(containerColor, isDark, alphaMid, showTopRow) {
+        if (alphaMid <= 0f) {
+            Brush.verticalGradient(
+                0.00f to containerColor,
+                0.72f to containerColor,
+                0.82f to containerColor.copy(alpha = 0.85f),
+                0.90f to containerColor.copy(alpha = 0.45f),
+                0.96f to containerColor.copy(alpha = 0.15f),
+                1.00f to containerColor.copy(alpha = 0.00f),
+            )
+        } else if (!showTopRow) {
+            if (isDark) {
+                Brush.verticalGradient(
+                    0.00f to containerColor.copy(alpha = 0.38f),
+                    0.25f to containerColor.copy(alpha = 0.32f),
+                    0.50f to containerColor.copy(alpha = 0.22f),
+                    0.75f to containerColor.copy(alpha = 0.10f),
+                    1.00f to containerColor.copy(alpha = 0f),
+                )
+            } else {
+                Brush.verticalGradient(
+                    0.00f to containerColor.copy(alpha = 0.74f),
+                    0.25f to containerColor.copy(alpha = 0.62f),
+                    0.50f to containerColor.copy(alpha = 0.44f),
+                    0.75f to containerColor.copy(alpha = 0.20f),
+                    1.00f to containerColor.copy(alpha = 0f),
+                )
+            }
+        } else {
+            val tail = 1f - alphaMid
+            if (isDark) {
+                Brush.verticalGradient(
+                    0f to containerColor.copy(alpha = 0.40f),
+                    alphaMid to containerColor.copy(alpha = 0.38f),
+                    alphaMid + tail * 0.25f to containerColor.copy(alpha = 0.32f),
+                    alphaMid + tail * 0.50f to containerColor.copy(alpha = 0.22f),
+                    alphaMid + tail * 0.75f to containerColor.copy(alpha = 0.10f),
+                    1f to containerColor.copy(alpha = 0f),
+                )
+            } else {
+                Brush.verticalGradient(
+                    0f to containerColor.copy(alpha = 1f),
+                    alphaMid to containerColor.copy(alpha = 0.74f),
+                    alphaMid + tail * 0.25f to containerColor.copy(alpha = 0.62f),
+                    alphaMid + tail * 0.50f to containerColor.copy(alpha = 0.44f),
+                    alphaMid + tail * 0.75f to containerColor.copy(alpha = 0.20f),
+                    1f to containerColor.copy(alpha = 0f),
+                )
+            }
+        }
+    }
+
+    val materialModifier = Modifier
+        .layoutId("material")
+        .fillMaxSize()
+        .then(
+            if (blurEnabled) {
+                Modifier.progressiveTextureBlur(
+                    backdrop = backdrop,
+                    shape = RectangleShape,
+                    blurRadius = engineBlurRadiusDp,
+                    gradient = ProgressiveBlur(
+                        angle = 90f,
+                        startFraction = blurStartFraction,
+                        endFraction = 1.00f,
+                        curve = blurCurve,
+                    ),
+                )
+            } else {
+                Modifier
+            },
+        )
+        .background(gradientBrush)
+
+    Layout(
+        content = {
+            Box(modifier = materialModifier)
+            Box(
+                modifier = Modifier
+                    .layoutId("content")
+                    .padding(top = topInset),
+            ) {
+                content()
+            }
+        },
+        modifier = modifier,
+    ) { measurables, constraints ->
+        val contentPlaceable = measurables
+            .first { it.layoutId == "content" }
+            .measure(constraints.copy(minWidth = 0, minHeight = 0))
+        val width = maxOf(contentPlaceable.width, constraints.minWidth)
+        val height = maxOf(contentPlaceable.height, constraints.minHeight)
+        val materialHeight = (height + extraHeightPx - materialTopPx).coerceAtLeast(1)
+        val materialPlaceable = measurables
+            .firstOrNull { it.layoutId == "material" }
+            ?.measure(
+                Constraints.fixed(
+                    width = width,
+                    height = materialHeight,
+                ),
+            )
+        layout(width, height) {
+            materialPlaceable?.placeRelative(0, materialTopPx)
+            contentPlaceable.placeRelative(0, 0)
+        }
+    }
+}

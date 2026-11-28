@@ -24,9 +24,8 @@ android {
         applicationId = "erl.bilico"
         minSdk = 26
         targetSdk = 37
-        versionCode = 155
-        versionName = "0.3.13-pre.1"
-        buildConfigField("String", "UPDATE_REPOSITORY", "\"st8wzs44dz-svg/BiliCO\"")
+        versionCode = 156
+        versionName = "0.4.0-pre.1"
     }
 
     signingConfigs {
@@ -52,20 +51,16 @@ android {
                 "proguard-rules.pro",
             )
         }
+        create("preview") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            signingConfig = null
+            matchingFallbacks += listOf("release")
+        }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isMinifyEnabled = false
-            if (providers.gradleProperty("bilicoUnsignedDebug").orNull == "true") {
-                signingConfig = null
-            }
-        }
-        create("preview") {
-            initWith(getByName("release"))
-            applicationIdSuffix = ".debug"
-            isShrinkResources = false
-            matchingFallbacks += "release"
-            signingConfig = null
         }
     }
 
@@ -97,40 +92,11 @@ kotlin {
     }
 }
 
-composeCompiler {
-    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
-}
-
 dependencies {
-    implementation(project(":data"))
-
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.animation)
-    implementation(libs.androidx.compose.material3)
+    implementation(project(":shared"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.profileinstaller)
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-
-    implementation(libs.coui.ui)
-    implementation(libs.coui.icons)
-    implementation(libs.coui.preference)
-    implementation(libs.coui.kit.lib)
-
-    implementation(libs.coil.compose)
-    implementation(libs.coil.gif)
-    implementation(libs.coil.network.okhttp)
-
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.exoplayer.dash)
-    implementation(libs.media3.exoplayer.hls)
-    implementation(libs.media3.ui)
     implementation(libs.media3.session)
-    implementation(libs.media3.datasource.okhttp)
-
-    implementation(libs.zxing.core)
+    implementation(libs.kotlinx.coroutines.android)
 }

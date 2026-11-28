@@ -32,11 +32,12 @@ import erl.bilico.BiliCoApplication
 import erl.bilico.MainActivity
 import erl.bilico.R
 import erl.bilico.data.util.Formatters
+import erl.bilico.platform.PlatformContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
- * 后台播放的系统媒体条与实时通知。进度、播放和暂停都交给 [MediaSession]，系统按播放器的位置自己画进度条。
- * 不接上下一首；普通视频在实时通知展开态补充点赞与默认收藏夹一键收藏图标，番剧与直播保持仅播控。
+ * 后台播放的系统媒体条。进度、播放和暂停都交给 [MediaSession]，系统按播放器的位置自己画进度条。
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -55,24 +56,16 @@ class PlaybackService : MediaSessionService() {
     private var artworkBytes: ByteArray? = null
     private var loadedArtwork: String = ""
     private var publishedButtonState: ButtonState? = null
-    private var likeInFlight: Boolean = false
-    private var favoriteInFlight: Boolean = false
-
-    override fun onCreate() {
-        super.onCreate()
-        PlaybackBridge.setInteractionListener {
-            mainHandler.post { syncMediaButtons(mediaSession) }
-        }
-    }
+    private var likeInFlight = false
+    private var favoriteInFlight = false
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == PlaybackBridge.ACTION_STOP_BG) {
-            PlaybackBridge.stopPlayback(this)
+            PlaybackBridge.stopPlayback(PlatformContext(this))
             return START_NOT_STICKY
         }
-        // 前台服务必须在这次启动里立刻 startForeground。封面还没到、会话建不成时也先占住，避免超时被杀。
         if (intent?.getBooleanExtra(EXTRA_PROMOTE, false) == true) holdForeground()
         ensureSession()
         return super.onStartCommand(intent, flags, startId)
@@ -100,27 +93,27 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        PlaybackBridge.setInteractionListener(null)
-        publishedButtonState = null
+        PlaybackBridge.interactionListener = null
         mediaSession?.release()
         mediaSession = null
         sessionPlayer = null
         boundPlayer = null
+        publishedButtonState = null
         super.onDestroy()
     }
 
     private fun ensureSession() {
-        val player = PlaybackBridge.activePlayer ?: return
-        // 封面晚到只补一次。会话已经在前台就不再拆，拆掉会把 startForeground 打断。
+        val player: Player = PlaybackBridge.activePlayer?.exoPlayer ?: return
+        PlaybackBridge.interactionListener = {
+            mainHandler.post { syncMediaButtons(mediaSession) }
+        }
         if (boundPlayer === player && mediaSession != null) {
-            attachArtwork(mediaSession)
             syncMediaButtons(mediaSession)
+            attachArtwork(mediaSession)
             return
         }
         mediaSession?.release()
-        publishedButtonState = null
         boundPlayer = player
-        // 只改媒体条上看到的标题。正在播的地址由播放页自己设，这里换媒体项会把地址换成空的，直接崩。
         val wrapped = object : ForwardingPlayer(player) {
             override fun getMediaMetadata(): MediaMetadata {
                 val builder = super.getMediaMetadata().buildUpon()
@@ -281,10 +274,6 @@ class PlaybackService : MediaSessionService() {
         runCatching { Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show() }
     }
 
-    /**
-     * B 站图床不认系统自己的请求。封面自己下，下好叠到会话读到的元数据上。
-     * 系统媒体会话只解码这一层的封面字节。不改正在播的那一条，地址不动。
-     */
     private fun attachArtwork(session: MediaSession?) {
         val source = PlaybackBridge.activeArtworkUrl
         if (source.isBlank() || source == loadedArtwork) return
@@ -300,22 +289,16 @@ class PlaybackService : MediaSessionService() {
                 Log.w(TAG, "封面下载失败 ${error.message}")
                 null
             } ?: run {
-                // 清空要回主线程做，并确认这条仍是当前封面：直接在工作线程写会把刚切到的下一条抹掉。
                 mainHandler.post {
                     if (PlaybackBridge.activeArtworkUrl == source) loadedArtwork = ""
                 }
                 return@Thread
             }
-            Log.i(TAG, "封面已下载 ${bytes.size}")
-            // 下载期间会话可能已经换了、封面也切走了，这时解码只是白烧 CPU。
             if (mediaSession !== session || PlaybackBridge.activeArtworkUrl != source) return@Thread
-            // 解码放在下载线程里做完，主线程只负责把结果交给会话，不跟页面转场抢帧。
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            if (bitmap == null) Log.w(TAG, "封面解码失败")
             mainHandler.post {
                 if (mediaSession !== session || PlaybackBridge.activeArtworkUrl != source) return@post
                 artworkBytes = bytes
-                // 标题不变时播放器不会再发元数据变化。补一次替换，让会话重新读封面。
                 publishArtwork(bytes)
                 if (bitmap != null) publishLegacyArtwork(bitmap)
                 val target = mediaSession ?: return@post
@@ -333,24 +316,13 @@ class PlaybackService : MediaSessionService() {
             .setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
             .build()
         val updated = current.buildUpon().setMediaMetadata(metadata).build()
-        if (!player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) {
-            Log.w(TAG, "封面写不进当前项")
-            return
-        }
+        if (!player.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS)) return
         runCatching { player.replaceMediaItem(index, updated) }
-            .onFailure { Log.w(TAG, "封面写入失败 ${it.javaClass.simpleName}") }
     }
 
-    /**
-     * 流体云读的是系统媒体会话里的封面位图，不读播放器元数据。
-     * 封面下好后直接写进这一层，标题和作者保持不变。
-     */
     private fun publishLegacyArtwork(bitmap: Bitmap) {
         val session = mediaSession ?: return
-        val compat = runCatching { legacySession(session) }.getOrElse {
-            Log.w(TAG, "系统会话取不到 ${it.javaClass.simpleName}: ${it.cause?.message ?: it.message}")
-            return
-        }
+        val compat = runCatching { legacySession(session) }.getOrNull() ?: return
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, PlaybackBridge.activeTitle.ifBlank { "正在后台播放" })
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, PlaybackBridge.activeSubtitle.ifBlank { "BiliCO" })
@@ -358,9 +330,7 @@ class PlaybackService : MediaSessionService() {
             .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
             .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, bitmap)
             .build()
-        // 不回读封面字节做核对：回读会在主线程把整张位图重新压缩一遍，退场动画会被它卡住。
         runCatching { compat.setMetadata(metadata) }
-            .onFailure { Log.w(TAG, "系统会话封面写入失败 ${it.javaClass.simpleName}") }
     }
 
     private fun legacySession(session: MediaSession): MediaSessionCompat {
@@ -371,9 +341,9 @@ class PlaybackService : MediaSessionService() {
         return stub.javaClass.getMethod("getSessionCompat").invoke(stub) as MediaSessionCompat
     }
 
-    /** 走 App 自己的网络栈。系统自己去拉图床会被拒，界面里的封面就是这条栈下的。 */
-    private fun download(url: String): ByteArray =
+    private fun download(url: String): ByteArray = runBlocking {
         (applicationContext as BiliCoApplication).container.client.fetchBytes(url)
+    }
 
     private inner class Callback : MediaSession.Callback {
         override fun onConnect(
@@ -421,12 +391,9 @@ class PlaybackService : MediaSessionService() {
         private val COMMAND_TOGGLE_LIKE = SessionCommand(ACTION_TOGGLE_LIKE, Bundle.EMPTY)
         private val COMMAND_TOGGLE_FAVORITE = SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY)
 
-        fun start(context: android.content.Context) {
+        fun start(context: Context) {
             val appCtx = context.applicationContext
-            runCatching {
-                // 应用还在前台时走普通启动。前台服务那条必须马上 startForeground，封面没到时建不成会话就会超时闪退。
-                appCtx.startService(Intent(appCtx, PlaybackService::class.java))
-            }
+            runCatching { appCtx.startService(Intent(appCtx, PlaybackService::class.java)) }
         }
 
         fun promote(context: Context) {
@@ -435,18 +402,14 @@ class PlaybackService : MediaSessionService() {
             runCatching { appCtx.startForegroundService(intent) }
         }
 
-        fun refreshIfRunning(context: android.content.Context) {
+        fun refreshIfRunning(context: Context) {
             val appCtx = context.applicationContext
-            runCatching {
-                appCtx.startService(Intent(appCtx, PlaybackService::class.java))
-            }
+            runCatching { appCtx.startService(Intent(appCtx, PlaybackService::class.java)) }
         }
 
-        fun stop(context: android.content.Context) {
+        fun stop(context: Context) {
             val appCtx = context.applicationContext
-            runCatching {
-                appCtx.stopService(Intent(appCtx, PlaybackService::class.java))
-            }
+            runCatching { appCtx.stopService(Intent(appCtx, PlaybackService::class.java)) }
         }
     }
 }

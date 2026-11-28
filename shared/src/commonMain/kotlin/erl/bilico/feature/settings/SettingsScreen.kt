@@ -1,0 +1,588 @@
+package erl.bilico.feature.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.SingletonImageLoader
+import erl.bilico.data.util.Formatters
+import erl.bilico.di.AppContainer
+import erl.bilico.platform.LocalPlatformContext
+import erl.bilico.platform.PlatformBackHandler
+import erl.bilico.platform.currentAppVersionName
+import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.NavState
+import erl.bilico.ui.Route
+import erl.bilico.ui.components.SectionTitle
+import erl.bilico.ui.components.navBottomPadding
+import erl.bilico.ui.glassBarContentTop
+import erl.bilico.ui.layerBackdropIf
+import erl.bilico.ui.pageContainerColor
+import erl.bilico.ui.pinnedHeight
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
+import io.github.suqi8.coui.kmp.basic.LocalEdgeToEdge
+import io.github.suqi8.coui.kmp.basic.TopAppBarDefaults
+import io.github.suqi8.coui.kmp.basic.rememberTopAppBarSearchState
+import io.github.suqi8.coui.kmp.basic.topAppBarSearchContent
+import io.github.suqi8.coui.kmp.blur.LocalBackdrop
+import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
+import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
+import kotlinx.coroutines.launch
+
+@Composable
+fun SettingsScreen(
+    container: AppContainer,
+    nav: NavState,
+) {
+    val context = LocalPlatformContext.current
+    val coilContext = coil3.compose.LocalPlatformContext.current
+    val appVersionName = remember(context) { currentAppVersionName(context) }
+    val scope = rememberCoroutineScope()
+    val pageColor = pageContainerColor()
+    val backdrop = rememberLayerBackdrop()
+    val topBarHeight = pinnedHeight(TopAppBarDefaults.SmallTopAppBarCenterHeight)
+    val mainListState = rememberLazyListState()
+    val searchListState = rememberLazyListState()
+
+    val darkMode by container.settings.darkMode.collectAsStateWithLifecycle()
+    val accentColor by container.settings.accentColor.collectAsStateWithLifecycle()
+    val accentHyperlink by container.settings.accentHyperlink.collectAsStateWithLifecycle()
+    val meIconColorMode by container.settings.meIconColorMode.collectAsStateWithLifecycle()
+    val returnBounce by container.settings.returnBounce.collectAsStateWithLifecycle()
+    val predictiveBackFollow by container.settings.predictiveBackFollow.collectAsStateWithLifecycle()
+    val quality by container.settings.defaultQuality.collectAsStateWithLifecycle()
+    val cdnOption by container.settings.cdnOption.collectAsStateWithLifecycle()
+    val httpDnsEnabled by container.settings.httpDnsEnabled.collectAsStateWithLifecycle()
+    val decoderMode by container.settings.decoderMode.collectAsStateWithLifecycle()
+    val preferSurfaceView by container.settings.preferSurfaceView.collectAsStateWithLifecycle()
+    val feedSource by container.settings.feedSource.collectAsStateWithLifecycle()
+    val inAppBackgroundPlay by container.settings.inAppBackgroundPlay.collectAsStateWithLifecycle()
+    val backgroundPlay by container.settings.backgroundPlay.collectAsStateWithLifecycle()
+    val autoPip by container.settings.autoPip.collectAsStateWithLifecycle()
+    val gestureHaptic by container.settings.gestureHaptic.collectAsStateWithLifecycle()
+    val longPressSpeed by container.settings.longPressSpeed.collectAsStateWithLifecycle()
+    val adjustableLongPressSpeed by container.settings.adjustableLongPressSpeed.collectAsStateWithLifecycle()
+    val swipeDownLockLongPressSpeed by container.settings.swipeDownLockLongPressSpeed.collectAsStateWithLifecycle()
+    val autoRotateMode by container.settings.autoRotateMode.collectAsStateWithLifecycle()
+    val gestureVolBright by container.settings.gestureVolumeBrightness.collectAsStateWithLifecycle()
+    val fullscreenGestureHint by container.settings.fullscreenGestureHint.collectAsStateWithLifecycle()
+    val playerConicLight by container.settings.playerConicLight.collectAsStateWithLifecycle()
+    val showVideoDislike by container.settings.showVideoDislike.collectAsStateWithLifecycle()
+    val autoNextRecommendPopup by container.settings.autoNext.recommendPopup.collectAsStateWithLifecycle()
+    val autoNextCountdownSec by container.settings.autoNext.countdownSeconds.collectAsStateWithLifecycle()
+    val coverAspect by container.settings.feed.coverAspect.collectAsStateWithLifecycle()
+    val coverBlurStyle by container.settings.feed.coverBlurStyle.collectAsStateWithLifecycle()
+    val feedColumns by container.settings.feed.columns.collectAsStateWithLifecycle()
+    val feedRefreshCount by container.settings.feed.refreshCount.collectAsStateWithLifecycle()
+    val searchHotGrid by container.settings.searchHotGrid.collectAsStateWithLifecycle()
+    val searchResultGrid by container.settings.searchResultGrid.collectAsStateWithLifecycle()
+    val homeTabsLayout by container.settings.feed.homeTabs.collectAsStateWithLifecycle()
+    val topBarLayoutFullscreen by container.settings.playerTopBar.fullscreen.collectAsStateWithLifecycle()
+    val topBarLayoutPortrait by container.settings.playerTopBar.portrait.collectAsStateWithLifecycle()
+    val danmakuEnabled by container.settings.danmakuEnabled.collectAsStateWithLifecycle()
+    val danmakuSettings by container.settings.danmakuSettings.collectAsStateWithLifecycle()
+    val advancedPlusOne by container.settings.advancedPlusOne.collectAsStateWithLifecycle()
+    val sponsorBlockEnabled by container.settings.sponsorBlockEnabled.collectAsStateWithLifecycle()
+    val sponsorBadgeEnabled by container.settings.sponsorBadgeEnabled.collectAsStateWithLifecycle()
+    val promotionBadgeEnabled by container.settings.promotionBadgeEnabled.collectAsStateWithLifecycle()
+    val sponsorSkipMode by container.settings.sponsorSkipMode.collectAsStateWithLifecycle()
+    val sponsorCategories by container.settings.sponsorCategories.collectAsStateWithLifecycle()
+    val statsOverlayEnabled by container.settings.statsOverlay.enabled.collectAsStateWithLifecycle()
+    val statsOverlayX by container.settings.statsOverlay.xFraction.collectAsStateWithLifecycle()
+    val statsOverlayY by container.settings.statsOverlay.yFraction.collectAsStateWithLifecycle()
+    val statsOverlayFields by container.settings.statsOverlay.visibleFields.collectAsStateWithLifecycle()
+    val autoCheckUpdate by container.settings.autoCheckUpdate.collectAsStateWithLifecycle()
+    val acceptPrerelease by container.settings.acceptPrerelease.collectAsStateWithLifecycle()
+    val inAppUpdate by container.settings.inAppUpdate.collectAsStateWithLifecycle()
+    val account by container.session.account.collectAsStateWithLifecycle()
+    val sessions by container.session.sessions.collectAsStateWithLifecycle()
+    val downloadTasks by container.downloads.tasks.collectAsStateWithLifecycle()
+    val downloadBytes by container.downloads.totalCachedBytes.collectAsStateWithLifecycle()
+
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    var pickAccentColor by remember { mutableStateOf(false) }
+    var pickCdn by remember { mutableStateOf(false) }
+    var showDanmakuSettings by remember { mutableStateOf(false) }
+    var showTopBarSettings by remember { mutableStateOf(false) }
+    var showHomeTabsSettings by remember { mutableStateOf(false) }
+    var showSponsorCategories by remember { mutableStateOf(false) }
+    var confirmLogout by remember { mutableStateOf(false) }
+    var switchAccounts by remember { mutableStateOf(false) }
+    var cacheCleared by remember { mutableIntStateOf(0) }
+
+    val trimmedQuery = searchQuery.trim()
+    val inSearchResults = trimmedQuery.isNotEmpty()
+    val searchTerms = remember(trimmedQuery) { parseSettingsSearchTerms(trimmedQuery) }
+    val searchTransition = rememberTopAppBarSearchState(active = inSearchResults)
+
+    val activeListState = if (inSearchResults) searchListState else mainListState
+    BindScrollToTop(activeListState)
+
+    LaunchedEffect(trimmedQuery) {
+        if (inSearchResults && (searchListState.firstVisibleItemIndex != 0 || searchListState.firstVisibleItemScrollOffset != 0)) {
+            searchListState.scrollToItem(0)
+        }
+    }
+
+    PlatformBackHandler(enabled = searchExpanded) {
+        searchQuery = ""
+        searchExpanded = false
+    }
+
+    val doneCount = remember(downloadTasks) { downloadTasks.count { it.isCompleted } }
+    val activeCount = remember(downloadTasks) { downloadTasks.count { it.isActive } }
+    val downloadSummary = when {
+        activeCount > 0 -> "$activeCount 个下载中 · 占用 ${Formatters.formatFileSize(downloadBytes)}"
+        doneCount > 0 -> "已缓存 $doneCount 个视频 · 占用 ${Formatters.formatFileSize(downloadBytes)}"
+        else -> "暂无缓存视频"
+    }
+    val homeTabsSummary = homeTabsLayout.visibleTabs().joinToString(" · ") { it.label }
+    val cacheSummary = if (cacheCleared > 0) "已清除" else "清理本地图片与边播边存缓冲，不影响账号与离线缓存"
+
+    val groups = buildList {
+        add(
+            SettingsGroupSection(
+                key = "display",
+                title = SettingsGroup.Display.title,
+                group = SettingsGroup.Display,
+                entries = displaySettingsEntries(
+                    darkMode = darkMode,
+                    accentColor = accentColor,
+                    accentHyperlink = accentHyperlink,
+                    meIconColorMode = meIconColorMode,
+                    coverAspect = coverAspect,
+                    coverBlurStyle = coverBlurStyle,
+                    feedColumns = feedColumns,
+                    feedRefreshCount = feedRefreshCount,
+                    searchHotGrid = searchHotGrid,
+                    searchResultGrid = searchResultGrid,
+                    homeTabsSummary = homeTabsSummary,
+                    showVideoDislike = showVideoDislike,
+                    returnBounce = returnBounce,
+                    predictiveBackFollow = predictiveBackFollow,
+                    onDarkModeChange = container.settings::setDarkMode,
+                    onPickAccentColor = { pickAccentColor = true },
+                    onAccentHyperlinkChange = container.settings::setAccentHyperlink,
+                    onMeIconColorModeChange = container.settings::setMeIconColorMode,
+                    onCoverAspectChange = container.settings.feed::setCoverAspect,
+                    onCoverBlurStyleChange = container.settings.feed::setCoverBlurStyle,
+                    onFeedColumnsChange = container.settings.feed::setColumns,
+                    onFeedRefreshCountChange = container.settings.feed::setRefreshCount,
+                    onSearchHotGridChange = container.settings::setSearchHotGrid,
+                    onSearchResultGridChange = container.settings::setSearchResultGrid,
+                    onOpenHomeTabs = { showHomeTabsSettings = true },
+                    onShowVideoDislikeChange = container.settings::setShowVideoDislike,
+                    onReturnBounceChange = container.settings::setReturnBounce,
+                    onPredictiveBackFollowChange = container.settings::setPredictiveBackFollow,
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "player",
+                title = SettingsGroup.Player.title,
+                group = SettingsGroup.Player,
+                entries = playerSettingsEntries(
+                    quality = quality,
+                    cdnOption = cdnOption,
+                    decoderMode = decoderMode,
+                    preferSurfaceView = preferSurfaceView,
+                    inAppBackgroundPlay = inAppBackgroundPlay,
+                    backgroundPlay = backgroundPlay,
+                    autoPip = autoPip,
+                    autoRotateMode = autoRotateMode,
+                    longPressSpeed = longPressSpeed,
+                    adjustableLongPressSpeed = adjustableLongPressSpeed,
+                    swipeDownLockLongPressSpeed = swipeDownLockLongPressSpeed,
+                    gestureVolBright = gestureVolBright,
+                    fullscreenGestureHint = fullscreenGestureHint,
+                    gestureHaptic = gestureHaptic,
+                    playerConicLight = playerConicLight,
+                    statsOverlayEnabled = statsOverlayEnabled,
+                    statsOverlayX = statsOverlayX,
+                    statsOverlayY = statsOverlayY,
+                    statsOverlayVisibleCount = statsOverlayFields.size,
+                    autoNextRecommendPopup = autoNextRecommendPopup,
+                    autoNextCountdownSeconds = autoNextCountdownSec,
+                    onQualityChange = container.settings::setDefaultQuality,
+                    onPickCdn = { pickCdn = true },
+                    onDecoderModeChange = container.settings::setDecoderMode,
+                    onPreferSurfaceViewChange = container.settings::setPreferSurfaceView,
+                    onInAppBackgroundPlayChange = container.settings::setInAppBackgroundPlay,
+                    onBackgroundPlayChange = container.settings::setBackgroundPlay,
+                    onAutoPipChange = container.settings::setAutoPip,
+                    onAutoRotateModeChange = container.settings::setAutoRotateMode,
+                    onLongPressSpeedChange = container.settings::setLongPressSpeed,
+                    onAdjustableLongPressSpeedChange = container.settings::setAdjustableLongPressSpeed,
+                    onSwipeDownLockLongPressSpeedChange = container.settings::setSwipeDownLockLongPressSpeed,
+                    onGestureVolBrightChange = container.settings::setGestureVolumeBrightness,
+                    onFullscreenGestureHintChange = container.settings::setFullscreenGestureHint,
+                    onGestureHapticChange = container.settings::setGestureHaptic,
+                    onOpenTopBarSettings = { showTopBarSettings = true },
+                    onOpenStatsOverlaySettings = { nav.push(Route.StatsOverlaySettings) },
+                    onPlayerConicLightChange = container.settings::setPlayerConicLight,
+                    onAutoNextRecommendPopupChange = container.settings.autoNext::setRecommendPopup,
+                    onAutoNextCountdownSecondsChange = container.settings.autoNext::setCountdownSeconds,
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "sponsor",
+                title = SettingsGroup.Sponsor.title,
+                group = SettingsGroup.Sponsor,
+                entries = sponsorSettingsEntries(
+                    enabled = sponsorBlockEnabled,
+                    skipMode = sponsorSkipMode,
+                    skipModeOptions = SPONSOR_SKIP_MODES,
+                    selectedCategoryCount = sponsorCategories.size,
+                    sponsorBadgeEnabled = sponsorBadgeEnabled,
+                    promotionBadgeEnabled = promotionBadgeEnabled,
+                    onEnabledChange = container.settings::setSponsorBlockEnabled,
+                    onSkipModeChange = container.settings::setSponsorSkipMode,
+                    onOpenCategories = { showSponsorCategories = true },
+                    onSponsorBadgeChange = container.settings::setSponsorBadgeEnabled,
+                    onPromotionBadgeChange = container.settings::setPromotionBadgeEnabled,
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "danmaku",
+                title = SettingsGroup.Danmaku.title,
+                group = SettingsGroup.Danmaku,
+                entries = listOf(
+                    SettingsEntry(
+                        id = "danmaku",
+                        title = "弹幕",
+                        keywords = "开关 显示 隐藏",
+                    ) { pos ->
+                        SettingsSwitchRow(
+                            checked = danmakuEnabled,
+                            onCheckedChange = container.settings::setDanmakuEnabled,
+                            title = "弹幕",
+                            modifier = Modifier.testTag("settings_danmaku"),
+                            cardListPosition = pos,
+                        )
+                    },
+                    SettingsEntry(
+                        id = "danmaku_detail",
+                        title = "弹幕设置",
+                        summary = "不透明度 · 字号 · 显示区域 · 类型屏蔽 · 速度",
+                        keywords = "描边 字体 行高 合并 重复 彩色",
+                    ) { pos ->
+                        SettingsArrowRow(
+                            title = "弹幕设置",
+                            modifier = Modifier.testTag("settings_danmaku_detail"),
+                            summary = "不透明度 · 字号 · 显示区域 · 类型屏蔽 · 速度",
+                            cardListPosition = pos,
+                            onClick = { showDanmakuSettings = true },
+                        )
+                    },
+                    SettingsEntry(
+                        id = "danmaku_advanced_plus_one",
+                        title = "高级+1",
+                        summary = "开启后，直播间点击弹幕时在 +1 右侧显示 @+1",
+                        keywords = "直播 粉丝牌 +1",
+                    ) { pos ->
+                        SettingsSwitchRow(
+                            checked = advancedPlusOne,
+                            onCheckedChange = container.settings::setAdvancedPlusOne,
+                            title = "高级+1",
+                            summary = "开启后，直播间点击弹幕时在 +1 右侧显示 @+1",
+                            modifier = Modifier.testTag("settings_danmaku_advanced_plus_one"),
+                            cardListPosition = pos,
+                        )
+                    },
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "block",
+                title = SettingsGroup.Block.title,
+                showDividers = true,
+                group = SettingsGroup.Block,
+                entries = listOf(
+                    SettingsEntry(
+                        id = "feed_source",
+                        title = "推荐信息流来源",
+                        summary = "切换首页推荐为 App 端或网页端；云端黑名单与「我不想看」偏好按当前账号同步",
+                        keywords = "App 网页 推荐 接口",
+                    ) { pos ->
+                        SettingsDropdownRow(
+                            items = FEED_SOURCE_OPTIONS,
+                            selectedIndex = feedSource.coerceIn(0, FEED_SOURCE_OPTIONS.lastIndex),
+                            title = "推荐信息流来源",
+                            summary = "切换首页推荐为 App 端或网页端；云端黑名单与「我不想看」偏好按当前账号同步",
+                            modifier = Modifier.testTag("settings_feed_source"),
+                            cardListPosition = pos,
+                            onSelectedIndexChange = container.settings::setFeedSource,
+                        )
+                    },
+                    SettingsEntry(
+                        id = "block_manager",
+                        title = "屏蔽管理",
+                        summary = "关键词、UP 主、黑名单、视频与推荐过滤",
+                        keywords = "正则 时长 播放量 点赞率 过滤",
+                    ) { pos ->
+                        SettingsArrowRow(
+                            title = "屏蔽管理",
+                            summary = "关键词、UP 主、黑名单、视频与推荐过滤",
+                            cardListPosition = pos,
+                            onClick = { nav.push(Route.BlockManager) },
+                        )
+                    },
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "storage",
+                title = "网络与存储",
+                showDividers = true,
+                group = SettingsGroup.Storage,
+                entries = listOf(
+                    SettingsEntry(
+                        id = "http_dns",
+                        title = "HTTPDNS 加速",
+                        summary = "对接口、图床与视频 CDN 启用分层 HTTPDNS / DoH 解析并自动回退",
+                        keywords = "DNS DoH 网络 加速 解析 CDN httpdns",
+                    ) { pos ->
+                        SettingsSwitchRow(
+                            checked = httpDnsEnabled,
+                            onCheckedChange = container.settings::setHttpDnsEnabled,
+                            title = "HTTPDNS 加速",
+                            summary = "对接口、图床与视频 CDN 启用分层 HTTPDNS / DoH 解析并自动回退",
+                            modifier = Modifier.testTag("settings_http_dns"),
+                            cardListPosition = pos,
+                        )
+                    },
+                    SettingsEntry(
+                        id = "downloads",
+                        title = "离线缓存",
+                        summary = downloadSummary,
+                        keywords = "下载 视频 空间 占用",
+                    ) { pos ->
+                        SettingsArrowRow(
+                            title = "离线缓存",
+                            modifier = Modifier.testTag("settings_downloads"),
+                            summary = downloadSummary,
+                            cardListPosition = pos,
+                            onClick = { nav.push(Route.Downloads) },
+                        )
+                    },
+                    SettingsEntry(
+                        id = "cache",
+                        title = "清除图片与播放缓存",
+                        summary = cacheSummary,
+                        keywords = "清理 缓存 图片 播放 边播边存 磁盘 cache clear storage",
+                    ) { pos ->
+                        SettingsArrowRow(
+                            title = "清除图片与播放缓存",
+                            modifier = Modifier.testTag("settings_cache"),
+                            summary = cacheSummary,
+                            cardListPosition = pos,
+                            onClick = {
+                                scope.launch {
+                                    val loader = SingletonImageLoader.get(coilContext)
+                                    loader.diskCache?.clear()
+                                    loader.memoryCache?.clear()
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                        erl.bilico.player.clearPlatformMediaCache(context)
+                                    }
+                                    cacheCleared++
+                                }
+                            },
+                        )
+                    },
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "update",
+                title = SettingsGroup.Update.title,
+                showDividers = true,
+                group = SettingsGroup.Update,
+                entries = updateSettingsEntries(
+                    versionName = appVersionName,
+                    checkingUpdate = container.updater.checkingUpdate,
+                    autoCheckUpdate = autoCheckUpdate,
+                    acceptPrerelease = acceptPrerelease,
+                    inAppUpdate = inAppUpdate,
+                    onCheckUpdate = { scope.launch { container.updater.checkUpdate(manual = true) } },
+                    onOpenChangelog = { nav.push(Route.Update) },
+                    onAutoCheckUpdateChange = container.settings::setAutoCheckUpdate,
+                    onAcceptPrereleaseChange = container.settings::setAcceptPrerelease,
+                    onInAppUpdateChange = container.settings::setInAppUpdate,
+                ),
+            ),
+        )
+        add(
+            SettingsGroupSection(
+                key = "about",
+                title = SettingsGroup.About.title,
+                group = SettingsGroup.About,
+                entries = listOf(
+                    SettingsEntry(
+                        id = "about",
+                        title = "关于 BiliCO",
+                        summary = "v$appVersionName",
+                        keywords = "开源 仓库 致谢 版本",
+                    ) { pos ->
+                        SettingsArrowRow(
+                            title = "关于 BiliCO",
+                            modifier = Modifier.testTag("settings_about"),
+                            summary = "v$appVersionName",
+                            cardListPosition = pos,
+                            onClick = { nav.push(Route.About) },
+                        )
+                    },
+                ),
+            ),
+        )
+        val accountEntries = accountSettingsEntries(
+            account = account,
+            sessions = sessions,
+            onSwitchAccount = { switchAccounts = true },
+            onLogout = { confirmLogout = true },
+        )
+        if (accountEntries.isNotEmpty()) {
+            add(
+                SettingsGroupSection(
+                    key = "account",
+                    title = SettingsGroup.Account.title,
+                    group = SettingsGroup.Account,
+                    entries = accountEntries,
+                ),
+            )
+        }
+    }
+
+    val filteredGroups = filterSettingsGroups(groups, searchTerms)
+
+    Box(Modifier.fillMaxSize().background(pageColor)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                .background(pageColor),
+        ) {
+            if (searchTransition.isContentVisible) {
+                LazyColumn(
+                    state = mainListState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .topAppBarSearchContent(searchTransition)
+                        .scrollEndHaptic(),
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        top = glassBarContentTop(topBarHeight, 10.dp),
+                        end = 12.dp,
+                        bottom = 24.dp + navBottomPadding(),
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val shownHeaders = HashSet<String>()
+                    groups.forEach { group ->
+                        if (shownHeaders.add(group.headerGroupKey)) {
+                            val isFirstHeader = shownHeaders.size == 1
+                            item(key = "${group.headerGroupKey}-title") {
+                                SectionTitle(
+                                    text = group.title,
+                                    topPadding = if (isFirstHeader) 4.dp else 14.dp,
+                                )
+                            }
+                        }
+                        item(key = group.key) {
+                            SettingsGroupCard(
+                                entries = group.entries,
+                                showDividers = group.showDividers,
+                            )
+                        }
+                    }
+                }
+            }
+
+            SettingsSearchResultsLayer(
+                visible = inSearchResults,
+                query = trimmedQuery,
+                terms = searchTerms,
+                filteredGroups = filteredGroups,
+                parentTitle = "设置",
+                listState = searchListState,
+                topBarHeight = topBarHeight,
+            )
+        }
+
+        CompositionLocalProvider(
+            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+            LocalEdgeToEdge provides true,
+        ) {
+            SettingsSearchTopBar(
+                title = "设置",
+                query = searchQuery,
+                expanded = searchExpanded,
+                onQueryChange = { searchQuery = it },
+                onExpandedChange = { searchExpanded = it },
+                onBack = nav::pop,
+                listState = activeListState,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
+    }
+
+    SettingsDialogsHost(
+        container = container,
+        nav = nav,
+        darkMode = darkMode,
+        accentColor = accentColor,
+        cdnOption = cdnOption,
+        danmakuSettings = danmakuSettings,
+        topBarLayoutFullscreen = topBarLayoutFullscreen,
+        topBarLayoutPortrait = topBarLayoutPortrait,
+        homeTabsLayout = homeTabsLayout,
+        sponsorCategories = sponsorCategories,
+        account = account,
+        sessions = sessions,
+        pickAccentColor = pickAccentColor,
+        pickCdn = pickCdn,
+        showDanmakuSettings = showDanmakuSettings,
+        showTopBarSettings = showTopBarSettings,
+        showHomeTabsSettings = showHomeTabsSettings,
+        showSponsorCategories = showSponsorCategories,
+        switchAccounts = switchAccounts,
+        confirmLogout = confirmLogout,
+        onDismissAccentColor = { pickAccentColor = false },
+        onDismissCdn = { pickCdn = false },
+        onDismissDanmaku = { showDanmakuSettings = false },
+        onDismissTopBar = { showTopBarSettings = false },
+        onDismissHomeTabs = { showHomeTabsSettings = false },
+        onDismissSponsorCategories = { showSponsorCategories = false },
+        onDismissSwitchAccounts = { switchAccounts = false },
+        onDismissLogout = { confirmLogout = false },
+    )
+}
+
+private val FEED_SOURCE_OPTIONS = listOf("App 端推荐", "网页端推荐")
+private val SPONSOR_SKIP_MODES = listOf("自动跳过", "手动提示", "仅标记片段")

@@ -37,32 +37,6 @@ Kotlin · Jetpack Compose · COUI
 
 前往 [Releases](https://github.com/Costben/BiliCO/releases) 下载最新 APK 安装即可。应用内「设置 → 检查更新」也支持直接检测新版与预发布版本并完成下载安装。
 
-### 发布个人预览版
-
-个人预览版（`assemblePreview`，包名 `erl.bilico.debug`）通过 [个人仓库的 Releases](https://github.com/astarion1965974/BiliCO/releases) 获取更新。`0.2.11-pre.11` 可手动覆盖安装 `0.2.11-pre.12`，之后可在 App 的「检查更新」中获取新版。
-
-1. 每次发包时，在 `app/build.gradle.kts` 递增 `versionName` 和 `versionCode`，并推送到 `build/keep-screen-on-apk`。例如 `0.2.11-pre.12` 对应 `versionCode` 133。
-2. 从该提交的 [GitHub Actions 构建](https://github.com/astarion1965974/BiliCO/actions/workflows/build-keep-screen-on-apk.yml) 下载 `BiliCO-signed-APK`，解压获得 `BiliCO-<versionName>.apk`。
-3. 在个人仓库创建标签为 `v<versionName>` 的 GitHub Pre-release，填写更新日志，附上签名 APK 后发布。标签 `v0.2.11-pre.12` 对应 `BiliCO-0.2.11-pre.12.apk`。
-
-#### 一次性配置自动签名
-
-1. 进入仓库 **Settings → Environments** 创建 `bilico-preview-signing`。在 **Deployment branches and tags** 选择 **Selected branches and tags**，添加分支规则 `build/keep-screen-on-apk`。如需推送后自动签名，保持 **Required reviewers** 关闭。
-2. 在原签名环境中，将签署 `pre.11` 的原 PKCS#12 密钥库和密码存入该 Environment。密钥别名为 `bilico-update`。以下命令使用有仓库管理权限的 GitHub 登录，`BILICO_KEYSTORE_PATH` 指向原密钥库。
-
-   ```bash
-   base64 -w0 "$BILICO_KEYSTORE_PATH" | gh secret set BILICO_KEYSTORE_BASE64 --env bilico-preview-signing --repo astarion1965974/BiliCO
-   gh secret set BILICO_KEYSTORE_PASSWORD --env bilico-preview-signing --repo astarion1965974/BiliCO
-   ```
-
-   第二条命令会提示输入密码。若私钥条目有单独密码，同样设置 Environment Secret `BILICO_KEY_PASSWORD`。
-
-3. 保护规则和密钥配置完成后，设置仓库级 Actions 变量 `BILICO_SIGNING_ENABLED=true`。下一次推送会创建签名产物，签名证书必须匹配 `pre.11` 才会上传。
-
-   ```bash
-   gh variable set BILICO_SIGNING_ENABLED --body true --repo astarion1965974/BiliCO
-   ```
-
 ## 🛠️ 本地构建
 
 ### 环境要求

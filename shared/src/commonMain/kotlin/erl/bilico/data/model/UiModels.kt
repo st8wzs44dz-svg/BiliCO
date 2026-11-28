@@ -1,0 +1,644 @@
+package erl.bilico.data.model
+
+/** 推荐流卡片所需的字段，UI 不直接消费接口模型。 */
+data class FeedDislikeReason(
+    val id: Int,
+    val name: String,
+    val toast: String = "",
+    val isFeedback: Boolean = false,
+)
+
+data class FeedVideo(
+    val bvid: String,
+    val aid: Long,
+    val title: String,
+    val cover: String,
+    val upName: String,
+    val upMid: Long,
+    val upFace: String = "",
+    val playCount: Long,
+    val likeCount: Long = 0,
+    val danmaku: Long = 0,
+    val durationSec: Int,
+    val playCountText: String,
+    val danmakuText: String = "",
+    val durationText: String,
+    val isFollowed: Boolean = false,
+    val officialType: Int = -1,
+    val appParam: Long = 0L,
+    val cardGoto: String = "av",
+    val fromAppFeed: Boolean = false,
+    /** 推荐流下发的商业推广（小火箭）内容。 */
+    val isPromoted: Boolean = false,
+    val dislikeReasons: List<FeedDislikeReason> = emptyList(),
+    val dislikeFeedbacks: List<FeedDislikeReason> = emptyList(),
+)
+
+data class VideoPart(
+    val cid: Long,
+    val index: Int,
+    val title: String,
+    val durationSec: Long,
+    val aspect: Float = 0f,
+)
+
+/** 合集里的一集：换 bvid 就是另一条视频，同一 bvid 下按 cid 区分分 P。 */
+data class VideoEpisode(
+    val bvid: String,
+    val cid: Long,
+    val title: String,
+    val durationSec: Long,
+)
+
+data class VideoCollection(
+    val id: Long,
+    val title: String,
+    val episodes: List<VideoEpisode>,
+)
+
+data class VideoDetail(
+    val bvid: String,
+    val aid: Long,
+    val cid: Long,
+    val title: String,
+    val desc: String,
+    /** 简介内 `@用户名 -> mid` 映射，来自接口 `desc_v2`（type = 2）及联合投稿/UP 兜底。 */
+    val descMentions: Map<String, Long> = emptyMap(),
+    val cover: String,
+    val pubdate: Long,
+    val durationSec: Int,
+    val upMid: Long,
+    val upName: String,
+    val upFace: String,
+    val view: Long,
+    val danmaku: Long,
+    val reply: Long,
+    val like: Long,
+    val coin: Long,
+    val favorite: Long,
+    val pages: List<VideoPart>,
+    val collection: VideoCollection? = null,
+    /** 投稿时给视频打的标签，简介下面按原顺序展示。 */
+    val tags: List<String> = emptyList(),
+    val aspect: Float = 0f,
+) {
+    fun aspectFor(targetCid: Long): Float =
+        pages.firstOrNull { it.cid == targetCid }?.aspect?.takeIf { it > 0f } ?: aspect
+}
+
+data class QualityOption(
+    val quality: Int,
+    val label: String,
+    val needLogin: Boolean = false,
+    val needVip: Boolean = false,
+)
+
+data class PlaybackSource(
+    val videoUrl: String,
+    val videoBackupUrls: List<String>,
+    val audioUrl: String?,
+    val audioBackupUrls: List<String>,
+    val quality: Int,
+    val qualities: List<QualityOption>,
+    val durationMs: Long,
+    val lastPlayTimeMs: Long = 0L,
+    val lastPlayCid: Long = 0L,
+    val aspect: Float = 0f,
+    /** dash 轨自带的帧率；播放器容器里读不到时用它兜底。 */
+    val frameRate: Float = 0f,
+)
+
+/** HDR 相关档位：HDR 真彩 / 杜比视界 / HDR Vivid。 */
+private val HDR_QUALITY_IDS = setOf(125, 126, 129)
+
+val PlaybackSource.isHdr: Boolean get() = quality in HDR_QUALITY_IDS
+
+data class EmoteImage(
+    val url: String,
+    val large: Boolean = false,
+)
+
+/** 评论输入框表情面板里的一个表情：点一下往正文里插 [insert]。 */
+data class CommentEmote(
+    val text: String,
+    val url: String,
+    val large: Boolean = false,
+    /** 纯文字表情（颜文字）直接插原文，图片表情插 `[名字]`。 */
+    val insert: String = text,
+)
+
+data class CommentEmotePackage(
+    val id: Long = 0L,
+    val text: String = "",
+    val url: String = "",
+    val type: Int = 0,
+    val emotes: List<CommentEmote>,
+)
+
+data class CommentEmotePanel(
+    val packages: List<CommentEmotePackage>,
+    val manageUrl: String = DEFAULT_EMOTE_MANAGE_URL,
+)
+
+const val DEFAULT_EMOTE_MANAGE_URL = "https://www.bilibili.com/h5/mall/emoji-package/home?navhide=1"
+
+data class CommentSailing(
+    val imageUrl: String,
+    val numPrefix: String = "",
+    val numDesc: String = "",
+    val fanColorHex: String = "",
+)
+
+data class Comment(
+    val id: Long,
+    val rootId: Long,
+    val parentId: Long = 0L,
+    val userName: String,
+    val avatar: String,
+    val level: Int,
+    val timeSec: Long,
+    val content: String,
+    val like: Int,
+    val liked: Boolean = false,
+    val disliked: Boolean = false,
+    val replyCount: Int,
+    val mid: Long = 0L,
+    val location: String = "",
+    val vipColorHex: String = "",
+    val officialType: Int = -1,
+    val officialDesc: String = "",
+    val sailing: CommentSailing? = null,
+    val subReplyEntryText: String = "",
+    val isTop: Boolean = false,
+    val isUp: Boolean = false,
+    val upLiked: Boolean = false,
+    val upReplied: Boolean = false,
+    val emotes: Map<String, EmoteImage> = emptyMap(),
+    val mentions: Map<String, Long> = emptyMap(),
+    val pictures: List<DynamicImage> = emptyList(),
+    val replies: List<Comment> = emptyList(),
+)
+
+/** 播完后的连播/循环方式。 */
+enum class PlaybackEndMode(val code: Int, val label: String) {
+    /** 播完当前视频后停止。 */
+    OFF(0, "关闭"),
+    /** 播完自动接下一 P、合集下一集、队列或推荐视频。 */
+    AUTO_NEXT(1, "自动连播"),
+    /** 循环播放当前视频或当前分 P。 */
+    SINGLE_LOOP(2, "循环播放"),
+    /** 按分 P、合集或播单顺序播放，到末尾回到开头循环。 */
+    LIST_LOOP(3, "列表循环"),
+    ;
+
+    companion object {
+        fun fromCode(code: Int): PlaybackEndMode = entries.firstOrNull { it.code == code } ?: AUTO_NEXT
+    }
+}
+
+data class CommentPage(
+    val comments: List<Comment>,
+    val nextOffset: String?,
+    val isEnd: Boolean,
+    val total: Int,
+)
+
+data class SubReplyPage(
+    val replies: List<Comment>,
+    val total: Int,
+)
+
+/** 主楼评论排序：B 站 `mode=3` 按热度，`mode=2` 按时间。 */
+enum class CommentSort(val mode: Int) {
+    Hot(3),
+    New(2),
+}
+
+@kotlinx.serialization.Serializable
+data class Account(
+    val mid: Long,
+    val name: String,
+    val face: String,
+    /** 大会员在有效期内。取流时用它决定清晰度菜单要不要列出会员档位。 */
+    val vip: Boolean = false,
+    val sign: String = "",
+    /** 账号等级（0~6），-1 表示旧缓存尚未拉取等级信息。 */
+    val level: Int = -1,
+    val currentExp: Int = 0,
+    /** 下一级所需总经验；LV6 满级时为 null。 */
+    val nextExp: Int? = null,
+    /** 硬币余额（支持 0.5 枚），null 表示尚未拉取。 */
+    val coins: Double? = null,
+    val following: Int? = null,
+    val follower: Int? = null,
+    val dynamicCount: Int? = null,
+)
+
+/** 个人中心可编辑资料模型，由 `x/member/web/account` 与当前账号状态合成。 */
+data class EditableAccountProfile(
+    val mid: Long,
+    val uname: String,
+    val userid: String,
+    val face: String,
+    val sign: String,
+    val sex: String,
+    val birthday: String,
+    val nickFree: Boolean,
+)
+
+enum class DynamicKind {
+    VIDEO,
+    IMAGES,
+    TEXT,
+    FORWARD,
+    LIVE,
+    UNSUPPORTED,
+}
+
+data class DynamicImage(
+    val url: String,
+    val width: Int,
+    val height: Int,
+)
+
+data class DynamicVideoCard(
+    val bvid: String,
+    val title: String,
+    val cover: String,
+    val durationText: String,
+    val aid: Long = 0L,
+)
+
+/** 开播动态的直播间预览：封面、主播 uid、高能观众数与分区名。 */
+data class DynamicLiveCard(
+    val roomId: Long,
+    val uid: Long = 0L,
+    val title: String,
+    val cover: String,
+    val areaName: String,
+    val living: Boolean,
+    val onlineCount: Long? = null,
+)
+
+/** 动态卡片下方外露的精选/热评：整段文字已经拼好，表情单独给图，并保留定位所需字段。 */
+data class DynamicHotReply(
+    val text: String,
+    val emotes: Map<String, EmoteImage> = emptyMap(),
+    val rpid: Long = 0L,
+    val authorName: String = "",
+    val contentText: String = "",
+)
+
+/** 卡片点开后要跳去哪：有 cv 号走专栏，否则把这个动态自己的 id 交给阅读页。 */
+data class DynamicArticleCard(
+    val articleId: Long = 0L,
+    val title: String = "",
+    val dynamicId: String = "",
+)
+
+/** 动态卡片内嵌的投票摘要；详细选项与实时票数按 `voteId` 从 `vote_info` 拉取。 */
+data class DynamicVoteSummary(
+    val voteId: Long,
+    val title: String = "",
+    val endTimeSec: Long = 0L,
+    val joinNum: Long = 0L,
+    val choiceCnt: Int = 1,
+    val status: Int = 0,
+)
+
+data class DynamicItemUi(
+    val id: String,
+    val dynamicId: String = "",
+    val kind: DynamicKind,
+    val authorMid: Long = 0L,
+    val authorName: String,
+    val authorFace: String,
+    val authorOfficialType: Int = -1,
+    val authorOfficialDesc: String = "",
+    /** 头像框；空串就是不挂框。 */
+    val authorPendant: String = "",
+    /** 大会员昵称色（`#RRGGBB`），空串用默认前景色。 */
+    val authorNameColor: String = "",
+    /** 右侧装扮卡片图与粉丝编号。 */
+    val nameplateUrl: String = "",
+    val nameplateNumber: String = "",
+    val nameplateColor: String = "",
+    /** 卡片下方外露的精选评论。 */
+    val hotReplies: List<DynamicHotReply> = emptyList(),
+    val timeSec: Long,
+    val pubTimeText: String,
+    /** 时间后面跟的动作（「直播了」「投稿了视频」），空串就不显示。 */
+    val pubAction: String = "",
+    val title: String = "",
+    val content: String,
+    val richNodes: List<DynamicTextNode> = emptyList(),
+    val emotes: Map<String, EmoteImage> = emptyMap(),
+    val images: List<DynamicImage> = emptyList(),
+    val video: DynamicVideoCard? = null,
+    val live: DynamicLiveCard? = null,
+    /** 专栏或图文长文：点开进阅读页。 */
+    val article: DynamicArticleCard? = null,
+    val vote: DynamicVoteSummary? = null,
+    val forward: DynamicItemUi? = null,
+    val forwardCount: Int = 0,
+    val commentCount: Int = 0,
+    val likeCount: Int = 0,
+    /** 我是否已经给这条动态点过赞。 */
+    val liked: Boolean = false,
+    val commentOid: Long = 0L,
+    val commentType: Int = 17,
+    /** 长文型动态的正文图还在取：此时 content 里只剩「[图片]」占位，界面先用灰块顶上。 */
+    val pendingImages: Boolean = false,
+    /** 头像那一行的灰标签（如「充电专属」）：接口给的是小图，文字兜底。 */
+    val authorBadge: String = "",
+    val authorBadgeIcon: String = "",
+    /** 充电专属：正文被锁。feed 只给标记，面板文案要等详情补上。 */
+    val chargeLocked: Boolean = false,
+    val locked: DynamicLockedUi? = null,
+    val pendingLocked: Boolean = false,
+)
+
+/** 动态正文富文本节点类型，保留抽奖、网页、视频、艾特、话题等跳转语义。 */
+enum class DynamicTextNodeKind {
+    TEXT,
+    AT,
+    TOPIC,
+    LOTTERY,
+    WEB,
+    VIDEO,
+    EMOJI,
+    LINK,
+}
+
+data class DynamicTextNode(
+    val kind: DynamicTextNodeKind,
+    val text: String,
+    val target: String = "",
+)
+
+/** 充电专属动态的锁定面板，文案与按钮都来自接口的 `module_blocked`。 */
+data class DynamicLockedUi(
+    val title: String = "",
+    val hint: String = "",
+    val buttonText: String = "",
+    val buttonIcon: String = "",
+    val jumpUrl: String = "",
+)
+
+enum class HistoryBusiness {
+    VIDEO,
+    LIVE,
+    ARTICLE,
+}
+
+data class HistoryItem(
+    val key: String = "",
+    val bvid: String = "",
+    val cid: Long = 0L,
+    val seasonId: Long = 0L,
+    val epId: Long = 0L,
+    val isPgc: Boolean = false,
+    val businessType: HistoryBusiness = HistoryBusiness.VIDEO,
+    val targetId: Long = 0L,
+    val badge: String = "",
+    val liveStatus: Int = 0,
+    val title: String,
+    val cover: String,
+    val upName: String,
+    val viewAtSec: Long,
+    val progressSec: Int = 0,
+    val durationSec: Int = 0,
+)
+
+/** 历史记录条目按需补的播放量 / 弹幕数（接口列表本身不带）。 */
+data class HistoryStat(
+    val view: Long,
+    val danmaku: Long,
+)
+
+data class LiveRoomItem(
+    val roomId: Long,
+    val uid: Long = 0L,
+    val title: String,
+    val cover: String,
+    val anchor: String,
+    val online: Long,
+    val areaName: String,
+    /** 高能观众数（与 PiliPlus 一致，来自 queryContributionRank）；null 表示尚未拉取。 */
+    val onlineCount: Long? = null,
+)
+
+data class LiveRoomDetail(
+    val roomId: Long,
+    val uid: Long = 0L,
+    val title: String,
+    val cover: String,
+    val anchorName: String,
+    val anchorFace: String,
+    val anchorOfficialType: Int = -1,
+    val anchorOfficialDesc: String = "",
+    val online: Long,
+    val description: String,
+    val areaName: String,
+    val isLive: Boolean,
+    /** 高能观众数（与 PiliPlus `ONLINE_RANK_COUNT` / `queryContributionRank` 一致）；null 表示尚未拿到。 */
+    val onlineCount: Long? = null,
+)
+
+data class LivePlayback(
+    /** 同一直播间按偏好排好序的多条线路，第一条失败就换下一条。 */
+    val candidates: List<LiveCandidate>,
+    val qualities: List<QualityOption>,
+    val activeQuality: Int,
+    val streams: List<LiveStreamNode> = emptyList(),
+    val initialSelection: LiveStreamSelection = LiveStreamSelection(),
+    val onlyAudio: Boolean = false,
+) {
+    val url: String get() = candidates.first().url
+    val isHls: Boolean get() = candidates.first().isHls
+
+    fun resolveCandidate(selection: LiveStreamSelection): LiveCandidate? {
+        val stream = streams.getOrNull(selection.streamIndex) ?: streams.firstOrNull() ?: return null
+        val format = stream.formats.getOrNull(selection.formatIndex) ?: stream.formats.firstOrNull() ?: return null
+        val codec = format.codecs.getOrNull(selection.codecIndex) ?: format.codecs.firstOrNull() ?: return null
+        val urlInfo = codec.urlInfos.getOrNull(selection.urlIndex) ?: codec.urlInfos.firstOrNull() ?: return null
+        val fullUrl = urlInfo.host + codec.baseUrl + urlInfo.extra
+        return LiveCandidate(
+            url = fullUrl,
+            isHls = stream.protocolName == "http_hls" || fullUrl.contains(".m3u8", ignoreCase = true),
+            selection = selection,
+            currentQn = codec.currentQn,
+            acceptQn = codec.acceptQn,
+        )
+    }
+}
+
+data class LiveCandidate(
+    val url: String,
+    val isHls: Boolean,
+    val selection: LiveStreamSelection = LiveStreamSelection(),
+    val currentQn: Int = 0,
+    val acceptQn: List<Int> = emptyList(),
+)
+
+// ---------- 搜索 / 空间 / 收藏 / 关注 ----------
+
+data class SearchVideo(
+    val bvid: String,
+    val title: String,
+    val cover: String,
+    val author: String,
+    val upMid: Long,
+    val playText: String,
+    val durationText: String,
+    val pubdateText: String,
+    val aid: Long = 0L,
+)
+
+data class SearchUser(
+    val mid: Long,
+    val name: String,
+    val face: String,
+    val sign: String,
+    val fansText: String,
+    val videoCountText: String,
+    val level: Int = 0,
+    val officialType: Int = -1,
+    val officialDesc: String = "",
+    val recentVideos: List<SearchVideo> = emptyList(),
+)
+
+data class SearchArticle(
+    val id: Long,
+    val title: String,
+    val cover: String,
+    val author: String,
+    val upMid: Long,
+    val categoryName: String,
+    val viewText: String,
+    val likeText: String,
+    val desc: String,
+)
+
+data class SearchPgc(
+    val seasonId: Long,
+    val mediaId: Long,
+    val title: String,
+    val cover: String,
+    val seasonTypeName: String,
+    val scoreText: String,
+    val areas: String,
+    val styles: String,
+    val pubdateText: String,
+    val indexShow: String,
+    val desc: String,
+)
+
+data class SearchLive(
+    val roomId: Long,
+    val uid: Long,
+    val title: String,
+    val cover: String,
+    val anchor: String,
+    val face: String,
+    val cateName: String,
+    val onlineText: String,
+)
+
+data class SearchPageResult<T>(
+    val items: List<T>,
+    val numResults: Int,
+)
+
+data class SearchAllBundle(
+    val users: List<SearchUser> = emptyList(),
+    val pgc: List<SearchPgc> = emptyList(),
+    val videos: List<SearchVideo> = emptyList(),
+    val numResults: Int = 0,
+    val typeCounts: Map<String, Int> = emptyMap(),
+)
+
+data class SpaceProfile(
+    val mid: Long,
+    val name: String,
+    val face: String,
+    val sign: String,
+    val followersText: String,
+    val followingText: String,
+    val likesText: String,
+    val officialType: Int = -1,
+    val officialDesc: String = "",
+    val liveRoomId: Long = 0L,
+    val isLive: Boolean = false,
+    val liveTitle: String = "",
+)
+
+/** UP 主个人主页维护的播放合集或系列。 */
+data class SpaceCollection(
+    val id: Long,
+    val isSeason: Boolean,
+    val name: String,
+    val cover: String,
+    val description: String,
+    val total: Int,
+)
+
+/** UP 主个人主页图文 / 专栏列表条目。 */
+data class SpaceOpusUi(
+    val opusId: String,
+    val content: String,
+    val coverUrl: String,
+    val coverWidth: Int = 0,
+    val coverHeight: Int = 0,
+    val likeText: String = "",
+    val pubTime: String = "",
+)
+
+/** 空间投稿、收藏夹内容、稍后再看、历史共用的一张视频条目。 */
+data class LibraryVideo(
+    val bvid: String,
+    val title: String,
+    val cover: String,
+    val upName: String,
+    val playText: String = "",
+    val danmakuText: String = "",
+    /** 投稿时间文案，只有空间投稿列表会填；其余列表留空。 */
+    val pubTimeText: String = "",
+    val durationText: String = "",
+    val durationSec: Int = 0,
+    val progressSec: Int = 0,
+    val aid: Long = 0,
+    val favType: Int = 2,
+    val playCount: Long = 0L,
+)
+
+data class FavoriteFolder(
+    val mediaId: Long,
+    val title: String,
+    val cover: String,
+    /** 收藏夹里前几个视频的封面，用来拼列表左边那块四宫格。 */
+    val coverUrls: List<String> = emptyList(),
+    val countText: String,
+    val favorited: Boolean = false,
+)
+
+data class FollowingUser(
+    val mid: Long,
+    val name: String,
+    val face: String,
+    val sign: String,
+    val officialType: Int = -1,
+    val officialDesc: String = "",
+)
+
+data class QrLogin(
+    val key: String,
+    val url: String,
+)
+
+enum class QrLoginState {
+    WAITING,
+    SCANNED,
+    EXPIRED,
+    SUCCESS,
+}

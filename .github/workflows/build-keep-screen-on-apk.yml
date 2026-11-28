@@ -170,6 +170,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Wait for signed APK artifact propagation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+              --jq '.artifacts[] | select(.name == "BiliCO-signed-APK") | .id' | grep -q .; then
+              echo "BiliCO-signed-APK artifact indexed (attempt $attempt)."
+              exit 0
+            fi
+            sleep 5
+          done
       - name: Download the signed APK
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

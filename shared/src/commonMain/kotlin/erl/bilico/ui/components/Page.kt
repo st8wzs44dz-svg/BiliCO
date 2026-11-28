@@ -1,0 +1,323 @@
+package erl.bilico.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import erl.bilico.ui.BlurEffectsEnabled
+import erl.bilico.ui.PinnedBarDensity
+import erl.bilico.ui.glassBarContentTop
+import erl.bilico.ui.layerBackdropIf
+import erl.bilico.ui.pageContainerColor
+import erl.bilico.ui.pinnedHeight
+import erl.bilico.ui.rememberGridTopBarScrollBehavior
+import erl.bilico.ui.rememberListTopBarScrollBehavior
+import io.github.suqi8.coui.kmp.basic.FullPagePullToRefresh
+import io.github.suqi8.coui.kmp.basic.BindScrollToTop
+import io.github.suqi8.coui.kmp.basic.fullPagePullToRefreshColors
+import io.github.suqi8.coui.kmp.basic.LocalEdgeToEdge
+import io.github.suqi8.coui.kmp.basic.LocalPlatformAppBarMaterialEnabled
+import io.github.suqi8.coui.kmp.basic.ScrollBehavior
+import io.github.suqi8.coui.kmp.basic.SmallTopAppBar
+import io.github.suqi8.coui.kmp.basic.TopAppBarDefaults
+import io.github.suqi8.coui.kmp.basic.AppBarBlurOverlayDefaults
+import io.github.suqi8.coui.kmp.blur.LayerBackdrop
+import io.github.suqi8.coui.kmp.blur.LocalBackdrop
+import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
+import io.github.suqi8.coui.kmp.utils.scrollEndHaptic
+
+/**
+ * 二级页的统一外壳：玻璃顶栏 + 铺到屏幕边缘的列表。
+ *
+ * 列表录进 backdrop，顶栏浮在上面采样它做渐变模糊；末项靠 contentPadding 抬到导航条之上。
+ * 页面内容全部以列表项给出，滚动时顶栏才有东西可采。
+ *
+ * 顶栏默认走窗口级材质（ColorOS 的系统模糊）。页面里有会开关 backdrop 录制的弹层时——
+ * 菜单、对话框——系统会在录制停止后丢几帧模糊，看起来就是顶栏闪一下；这种页面传
+ * [platformBarMaterial] = false，改用 COUI 自己的引擎采样 [backdrop]，不会掉。
+ */
+@Composable
+fun SecondaryPage(
+    title: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String = "",
+    listState: LazyListState = rememberLazyListState(),
+    actions: @Composable RowScope.() -> Unit = {},
+    topBar: (@Composable () -> Unit)? = null,
+    platformBarMaterial: Boolean = true,
+    refreshing: Boolean? = null,
+    onRefresh: (() -> Unit)? = null,
+    // 调用方要把底栏之类的浮层也磨砂时，传自己的 backdrop 进来，让它们采到的是同一份列表。
+    backdrop: LayerBackdrop = rememberLayerBackdrop(),
+    // 底栏浮在列表上时，列表要多留出它那一份高度，末条消息才不会被压住。
+    contentBottomPadding: Dp? = null,
+    content: LazyListScope.() -> Unit,
+) {
+    val pageColor = pageContainerColor()
+    val defaultBottomPadding = 24.dp + navBottomPadding()
+    val topBarHeight = pinnedHeight(TopAppBarDefaults.SmallTopAppBarCenterHeight)
+    val glassExtraHeight = if (subtitle.isNotBlank()) 32.dp else AppBarBlurOverlayDefaults.ExtraHeight
+    val contentTop = glassBarContentTop(topBarHeight, 10.dp) +
+        if (subtitle.isNotBlank()) 14.dp else 0.dp
+    val scrollBehavior = rememberListTopBarScrollBehavior(listState)
+
+    BindScrollToTop(listState)
+
+    Box(modifier.fillMaxSize().background(pageColor)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                .background(pageColor)
+        ) {
+            val list: @Composable () -> Unit = {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(scrollBehavior.nestedScrollConnection)
+                        .scrollEndHaptic(),
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        top = contentTop,
+                        end = 12.dp,
+                        bottom = contentBottomPadding ?: defaultBottomPadding,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    content = content,
+                )
+            }
+            if (onRefresh != null) {
+                FullPagePullToRefresh(
+                    isRefreshing = refreshing == true,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = contentTop),
+                    colors = fullPagePullToRefreshColors(backgroundColor = pageColor),
+                    refreshTexts = FullPageRefreshTexts,
+                    completeHoldDurationMillis = FullPageRefreshHoldMillis,
+                    content = list,
+                )
+            } else {
+                list()
+            }
+        }
+
+        CompositionLocalProvider(
+            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+            LocalEdgeToEdge provides true,
+            LocalPlatformAppBarMaterialEnabled provides platformBarMaterial,
+        ) {
+            PinnedBarDensity {
+                if (topBar != null) {
+                    Box(Modifier.align(Alignment.TopCenter)) {
+                        topBar()
+                    }
+                } else {
+                    SmallTopAppBar(
+                        title = title,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                        color = pageColor,
+                        subtitle = subtitle,
+                        showDivider = false,
+                        gradientGlass = BlurEffectsEnabled,
+                        gradientGlassExtraHeight = glassExtraHeight,
+                        scrollBehavior = scrollBehavior,
+                        navigationIcon = { BackIconButton(onClick = onBack) },
+                        actions = actions,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** [SecondaryPage] 的双列版本：番剧、图集这类以封面为主的列表用它。 */
+@Composable
+fun SecondaryGridPage(
+    title: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    gridState: LazyGridState = rememberLazyGridState(),
+    content: LazyGridScope.() -> Unit,
+) {
+    val pageColor = pageContainerColor()
+    val backdrop = rememberLayerBackdrop()
+    val topBarHeight = pinnedHeight(TopAppBarDefaults.SmallTopAppBarCenterHeight)
+    val scrollBehavior = rememberGridTopBarScrollBehavior(gridState)
+
+    BindScrollToTop(gridState)
+
+    Box(modifier.fillMaxSize().background(pageColor)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                .background(pageColor)
+        ) {
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Fixed(2),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(scrollBehavior.nestedScrollConnection)
+                    .scrollEndHaptic(),
+                contentPadding = PaddingValues(
+                    start = 12.dp,
+                    top = glassBarContentTop(topBarHeight, 10.dp),
+                    end = 12.dp,
+                    bottom = 24.dp + navBottomPadding(),
+                ),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                content = content,
+            )
+        }
+
+        CompositionLocalProvider(
+            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+            LocalEdgeToEdge provides true,
+        ) {
+            PinnedBarDensity {
+                SmallTopAppBar(
+                    title = title,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    color = pageColor,
+                    showDivider = false,
+                    gradientGlass = BlurEffectsEnabled,
+                    scrollBehavior = scrollBehavior,
+                    navigationIcon = { BackIconButton(onClick = onBack) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * [SecondaryPage] 的横向分页版本：顶栏与一行标签钉住，内容按页左右滑动。
+ *
+ * 标签栏作为 [SmallTopAppBar] 的 bottomContent 挂接在顶栏毛玻璃内部，整体通透连续，
+ * 避免中途出现突兀不透明色块；列表内容从毛玻璃下方滑过被优雅采样；
+ * 首项内容通过动态测量的顶栏高度留出充足间距，绝不被标签栏遮挡。
+ */
+@Composable
+fun SecondaryPagerPage(
+    title: String,
+    onBack: () -> Unit,
+    pagerState: PagerState,
+    modifier: Modifier = Modifier,
+    actions: @Composable RowScope.() -> Unit = {},
+    topBar: (@Composable () -> Unit)? = null,
+    scrollBehavior: ScrollBehavior? = null,
+    header: @Composable () -> Unit,
+    page: @Composable (index: Int, contentTop: Dp) -> Unit,
+) {
+    val pageColor = pageContainerColor()
+    val backdrop = rememberLayerBackdrop()
+    val density = LocalDensity.current
+    // 状态栏 + 顶栏标题行 44dp + 标签行约 48dp + 呼吸间距 6dp，避免首帧为 0 导致内容跳动
+    val defaultContentTop = with(density) {
+        val statusPx = WindowInsets.statusBars.getTop(density)
+        statusPx.toDp() + 44.dp + 48.dp + 6.dp
+    }
+    var measuredContentTop by remember { mutableStateOf(defaultContentTop) }
+
+    Box(modifier.fillMaxSize().background(pageColor)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .layerBackdropIf(BlurEffectsEnabled, backdrop)
+                .background(pageColor)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                // 不预组合屏外未激活页签，避免未加载页签里的转圈动画常驻唤醒 Choreographer 拖高刷新率。
+                beyondViewportPageCount = 0,
+            ) { index ->
+                page(index, measuredContentTop)
+            }
+        }
+
+        CompositionLocalProvider(
+            LocalBackdrop provides if (BlurEffectsEnabled) backdrop else null,
+            LocalEdgeToEdge provides true,
+        ) {
+            PinnedBarDensity {
+                if (topBar != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .onSizeChanged {
+                                val h = with(density) { it.height.toDp() }
+                                measuredContentTop = h + 6.dp
+                            },
+                    ) {
+                        topBar()
+                    }
+                } else {
+                    SmallTopAppBar(
+                        title = title,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .onSizeChanged {
+                                val h = with(density) { it.height.toDp() }
+                                // 顶栏物理底沿落在 ChipTab 胶囊下方 6dp；首项留出 6dp 使得第一张卡片
+                                // 距离 ChipTab 胶囊底沿正好 12dp，严丝合缝对齐系统便签规范。
+                                measuredContentTop = h + 6.dp
+                            },
+                        color = pageColor,
+                        showDivider = false,
+                        gradientGlass = BlurEffectsEnabled,
+                        scrollBehavior = scrollBehavior,
+                        navigationIcon = { BackIconButton(onClick = onBack) },
+                        actions = actions,
+                        bottomContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp, bottom = 6.dp),
+                            ) {
+                                header()
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
