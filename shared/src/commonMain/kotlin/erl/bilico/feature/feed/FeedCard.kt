@@ -1,8 +1,5 @@
 package erl.bilico.feature.feed
 
-import erl.bilico.platform.PlatformContext
-import erl.bilico.platform.shareText
-import erl.bilico.platform.showToast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,10 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import io.github.suqi8.coui.kmp.squircle.SquircleShape
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,7 +32,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
-import erl.bilico.platform.LocalPlatformContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,14 +47,24 @@ import androidx.compose.ui.unit.sp
 import coil3.Image
 import coil3.compose.AsyncImage
 import erl.bilico.data.model.FeedVideo
+import erl.bilico.data.repository.BlockKeywordScope
 import erl.bilico.data.settings.CoverAspect
 import erl.bilico.data.settings.FeedCoverBlurStyle
 import erl.bilico.data.util.Formatters
+import erl.bilico.di.LocalAppContainer
+import erl.bilico.platform.LocalPlatformContext
+import erl.bilico.platform.PlatformContext
+import erl.bilico.platform.shareText
+import erl.bilico.platform.showToast
 import erl.bilico.ui.components.Avatar
 import erl.bilico.ui.components.CouiMenuItem
 import erl.bilico.ui.components.CouiPopupMenu
 import erl.bilico.ui.components.DanmakuStatIcon
+import erl.bilico.ui.components.FeedDislikeDialog
+import erl.bilico.ui.components.KeywordBlockDialog
 import erl.bilico.ui.components.OfficialVerifyBadge
+import erl.bilico.ui.components.ReportDialog
+import erl.bilico.ui.components.ReportTarget
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Text
@@ -74,11 +79,12 @@ import kotlin.math.roundToInt
 
 /** 不同列数下的卡片排版密度参数，保证 1~4 列都清晰不拥挤。 */
 private data class FeedCardMetrics(
-    val edgeInset: Dp,
-    val chipGap: Dp,
-    val chipFontSize: TextUnit,
-    val chipIconSize: Dp,
-    val chipPaddingH: Dp,
+    val coverStatsHorizontalPadding: Dp,
+    val coverStatsBottomPadding: Dp,
+    val statGap: Dp,
+    val statFontSize: TextUnit,
+    val statLineHeight: TextUnit,
+    val statIconSize: Dp,
     val showDanmakuOnCover: Boolean,
     val infoPadding: PaddingValues,
     val titleFontSize: TextUnit,
@@ -88,19 +94,21 @@ private data class FeedCardMetrics(
     val avatarSize: Dp,
     val avatarGap: Dp,
     val upFontSize: TextUnit,
+    val upLineHeight: TextUnit,
     val moreButtonSize: Dp,
     val moreIconSize: Dp,
 ) {
     companion object {
         fun forColumns(columns: Int): FeedCardMetrics = when {
             columns >= 4 -> FeedCardMetrics(
-                edgeInset = 2.dp,
-                chipGap = 3.dp,
-                chipFontSize = 8.sp,
-                chipIconSize = 8.dp,
-                chipPaddingH = 3.dp,
+                coverStatsHorizontalPadding = 4.dp,
+                coverStatsBottomPadding = 2.dp,
+                statGap = 4.dp,
+                statFontSize = 9.sp,
+                statLineHeight = 11.sp,
+                statIconSize = 10.dp,
                 showDanmakuOnCover = false,
-                infoPadding = PaddingValues(start = 5.dp, end = 2.dp, top = 5.dp, bottom = 4.dp),
+                infoPadding = PaddingValues(start = 5.dp, end = 3.dp, top = 4.dp, bottom = 5.dp),
                 titleFontSize = 11.sp,
                 titleLineHeight = 14.sp,
                 rowSpacer = 3.dp,
@@ -108,83 +116,91 @@ private data class FeedCardMetrics(
                 avatarSize = 14.dp,
                 avatarGap = 4.dp,
                 upFontSize = 10.sp,
+                upLineHeight = 12.sp,
                 moreButtonSize = 16.dp,
                 moreIconSize = 14.dp,
             )
 
             columns == 3 -> FeedCardMetrics(
-                edgeInset = 2.dp,
-                chipGap = 5.dp,
-                chipFontSize = 9.sp,
-                chipIconSize = 9.dp,
-                chipPaddingH = 3.dp,
+                coverStatsHorizontalPadding = 6.dp,
+                coverStatsBottomPadding = 3.dp,
+                statGap = 6.dp,
+                statFontSize = 10.sp,
+                statLineHeight = 13.sp,
+                statIconSize = 11.dp,
                 showDanmakuOnCover = false,
-                infoPadding = PaddingValues(start = 7.dp, end = 2.dp, top = 6.dp, bottom = 5.dp),
-                titleFontSize = 13.sp,
-                titleLineHeight = 17.sp,
+                infoPadding = PaddingValues(start = 7.dp, end = 4.dp, top = 5.dp, bottom = 6.dp),
+                titleFontSize = 12.sp,
+                titleLineHeight = 16.sp,
                 rowSpacer = 4.dp,
                 showAvatar = true,
                 avatarSize = 14.dp,
                 avatarGap = 4.dp,
-                upFontSize = 11.sp,
-                moreButtonSize = 18.dp,
-                moreIconSize = 16.dp,
+                upFontSize = 10.sp,
+                upLineHeight = 13.sp,
+                moreButtonSize = 16.dp,
+                moreIconSize = 14.dp,
             )
 
             else -> FeedCardMetrics(
-                edgeInset = 3.dp,
-                chipGap = 4.dp,
-                chipFontSize = 10.sp,
-                chipIconSize = 10.dp,
-                chipPaddingH = 4.dp,
+                coverStatsHorizontalPadding = 9.dp,
+                coverStatsBottomPadding = 3.dp,
+                statGap = 8.dp,
+                statFontSize = 11.sp,
+                statLineHeight = 14.sp,
+                statIconSize = 13.dp,
                 showDanmakuOnCover = true,
-                infoPadding = PaddingValues(start = 10.dp, end = 2.dp, top = 8.dp, bottom = 6.dp),
-                titleFontSize = 15.sp,
-                titleLineHeight = 21.sp,
-                rowSpacer = 6.dp,
+                infoPadding = PaddingValues(start = 9.dp, end = 6.dp, top = 5.dp, bottom = 7.dp),
+                titleFontSize = 13.sp,
+                titleLineHeight = 17.sp,
+                rowSpacer = 5.dp,
                 showAvatar = true,
-                avatarSize = 18.dp,
-                avatarGap = 6.dp,
-                upFontSize = 12.sp,
-                moreButtonSize = 20.dp,
-                moreIconSize = 18.dp,
+                avatarSize = 16.dp,
+                avatarGap = 5.dp,
+                upFontSize = 11.sp,
+                upLineHeight = 14.sp,
+                moreButtonSize = 18.dp,
+                moreIconSize = 16.dp,
             )
         }
     }
 }
 
-/** 推荐流与排行榜共用的视频卡片。 */
+/** 推荐流与排行榜共用的视频卡片：封面 + 镜像翻转模糊一体衬底（覆盖底边统计与紧凑信息区）。 */
 @Composable
 internal fun FeedCard(
     video: FeedVideo,
-    aspect: CoverAspect,
+    aspect: CoverAspect = CoverAspect.CLASSIC,
+    blurStyle: FeedCoverBlurStyle = FeedCoverBlurStyle.VIBRANT_DARK,
     coverWidthPx: Int,
     coverHeightPx: Int,
     modifier: Modifier = Modifier,
     columns: Int = 2,
-    generateBackground: Boolean = true,
-    blurStyle: FeedCoverBlurStyle = FeedCoverBlurStyle.VIBRANT_DARK,
-    onCoverSettled: () -> Unit = {},
     onOpen: () -> Unit,
     onWatchLater: () -> Unit,
+    generateBackground: Boolean = true,
+    onCoverSettled: () -> Unit = {},
 ) {
     val metrics = remember(columns) { FeedCardMetrics.forColumns(columns) }
     val coverUrl = remember(video.cover, coverWidthPx, coverHeightPx) {
         Formatters.sizedImageUrl(video.cover, coverWidthPx, coverHeightPx)
     }
+    val context = LocalPlatformContext.current
     val density = LocalDensity.current
     val avatarUrl = remember(video.upFace, density, metrics.avatarSize) {
         val pixels = with(density) { metrics.avatarSize.roundToPx() }.coerceAtLeast(1)
         val thumbnailPx = ((pixels + 31) / 32) * 32
         Formatters.sizedImageUrl(video.upFace, thumbnailPx, thumbnailPx)
     }
-    val context = LocalPlatformContext.current
     val scheme = COUITheme.colorScheme
     val appDarkTheme = scheme.surface.luminance() < 0.5f
-    var cardSize by remember { mutableStateOf(IntSize.Zero) }
-    var coverHeight by remember { mutableStateOf(0) }
+    // 长按卡片在手指位置弹同一个三点菜单，不跳到播放页也不走卡片点击。
+    val pressState = rememberPreciseClickState()
+    var menuExpanded by remember { mutableStateOf(false) }
     var coverReady by remember(coverUrl) { mutableStateOf(false) }
     var coverImage by remember(coverUrl) { mutableStateOf<Image?>(null) }
+    var cardSize by remember { mutableStateOf(IntSize.Zero) }
+    var coverHeight by remember { mutableStateOf(0) }
     val backdrop = rememberFeedCoverBackground(
         originalUrl = video.cover,
         coverUrl = coverUrl,
@@ -197,12 +213,12 @@ internal fun FeedCard(
         appDarkTheme = appDarkTheme,
     )
     val titleColor = backdrop?.titleColor ?: scheme.onSurface
-    val secondaryColor = backdrop?.secondaryTextColor ?: scheme.onSurfaceSecondary
-    val statsTint = backdrop?.statsColor ?: Color.White
-    val useLightChips = backdrop?.isLightSurface == true
-    // 长按卡片在手指位置弹同一个三点菜单，不跳到播放页也不走卡片点击。
-    val pressState = rememberPreciseClickState()
-    var menuExpanded by remember { mutableStateOf(false) }
+    val secondaryTextColor = backdrop?.secondaryTextColor ?: scheme.onSurfaceSecondary
+    val statsColor = backdrop?.statsColor ?: Color.White
+    val cardMenuItems = rememberVideoCardMenuItems(
+        video = video,
+        onWatchLater = onWatchLater,
+    )
 
     Box(modifier) {
         Card(
@@ -213,62 +229,81 @@ internal fun FeedCard(
             onClick = onOpen,
             onLongPress = { menuExpanded = true },
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onSizeChanged { cardSize = it },
-            ) {
-                backdrop?.let { bg ->
-                    val overlapPx = with(density) { FeedCoverOverlap.roundToPx() }.coerceAtMost(coverHeight)
-                    val topOffset = (coverHeight - overlapPx).coerceAtLeast(0)
-                    val dstHeight = (cardSize.height - topOffset).coerceAtLeast(1)
-                    Canvas(Modifier.matchParentSize()) {
-                        drawImage(
-                            image = bg.bitmap,
-                            dstOffset = IntOffset(0, topOffset),
-                            dstSize = IntSize(size.width.roundToInt().coerceAtLeast(1), dstHeight),
-                            filterQuality = FilterQuality.Low,
-                        )
+            Box(Modifier.fillMaxWidth().onSizeChanged { cardSize = it }) {
+                // 封面与镜像翻转模糊共用底层图层，超出卡片圆角轮廓的部分由 Card 直接裁剪。
+                Box(Modifier.matchParentSize()) {
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        onSuccess = { state ->
+                            coverReady = true
+                            coverImage = state.result.image
+                            onCoverSettled()
+                        },
+                        onError = {
+                            coverReady = false
+                            coverImage = null
+                            onCoverSettled()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(aspect.ratio)
+                            .background(scheme.surfaceContainerHigh),
+                    )
+                    if (backdrop != null) {
+                        Canvas(Modifier.matchParentSize()) {
+                            val top = (coverHeight - FeedCoverOverlap.roundToPx()).coerceAtLeast(0)
+                            val height = size.height.roundToInt() - top
+                            if (height > 0) {
+                                drawImage(
+                                    image = backdrop.bitmap,
+                                    dstOffset = IntOffset(0, top),
+                                    dstSize = IntSize(size.width.roundToInt(), height),
+                                    filterQuality = FilterQuality.Low,
+                                )
+                            }
+                        }
                     }
                 }
-                Column(Modifier.fillMaxWidth()) {
-                    // 封面顶到卡片上沿和两侧，圆角由卡片自己的轮廓裁出来，不再单独套内边距。
+
+                Column {
                     Box(
                         Modifier
                             .fillMaxWidth()
                             .aspectRatio(aspect.ratio)
                             .onSizeChanged { coverHeight = it.height },
                     ) {
-                        AsyncImage(
-                            model = coverUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            onSuccess = { result ->
-                                coverReady = true
-                                coverImage = result.result.image
-                                onCoverSettled()
-                            },
-                            onError = { onCoverSettled() },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                        // 底部一行：整数化紧凑格式 + 放不下时自动隐藏弹幕保「播放+时长」，杜绝 4.... 截断。
-                        val compactPlay = remember(video.playCountText) { Formatters.compactStatLabel(video.playCountText) }
-                        val compactDanmaku = remember(video.danmakuText, metrics.showDanmakuOnCover) {
-                            if (metrics.showDanmakuOnCover) Formatters.compactStatLabel(video.danmakuText) else ""
+                        if (coverReady) {
+                            val compactPlay = remember(video.playCountText) {
+                                Formatters.compactStatLabel(video.playCountText)
+                            }
+                            val compactDanmaku = remember(video.danmakuText, metrics.showDanmakuOnCover) {
+                                if (metrics.showDanmakuOnCover) {
+                                    Formatters.compactStatLabel(video.danmakuText)
+                                } else {
+                                    ""
+                                }
+                            }
+                            val compactDuration = remember(video.durationText) {
+                                Formatters.compactDurationLabel(video.durationText)
+                            }
+                            CoverBottomStats(
+                                playText = compactPlay,
+                                danmakuText = compactDanmaku,
+                                durationText = compactDuration,
+                                color = statsColor,
+                                metrics = metrics,
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = metrics.coverStatsHorizontalPadding,
+                                        end = metrics.coverStatsHorizontalPadding,
+                                        bottom = metrics.coverStatsBottomPadding,
+                                    ),
+                            )
                         }
-                        val compactDuration = remember(video.durationText) { Formatters.compactDurationLabel(video.durationText) }
-                        CoverBottomBadges(
-                            playText = compactPlay,
-                            danmakuText = compactDanmaku,
-                            durationText = compactDuration,
-                            metrics = metrics,
-                            textColor = statsTint,
-                            chipBackground = if (useLightChips) Color(0x40FFFFFF) else CoverChipBackground,
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .fillMaxWidth()
-                                .padding(metrics.edgeInset),
-                        )
                     }
 
                     Column(
@@ -299,7 +334,8 @@ internal fun FeedCard(
                                 Text(
                                     text = video.upName.ifBlank { "未知 UP" },
                                     fontSize = metrics.upFontSize,
-                                    color = secondaryColor,
+                                    lineHeight = metrics.upLineHeight,
+                                    color = secondaryTextColor,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
@@ -314,18 +350,13 @@ internal fun FeedCard(
                                     )
                                 }
                             }
-                            // 播放量搬进封面之后，三点菜单跟 UP 主同一行靠右，卡片少一行。
-                            val cardMenuItems = rememberVideoCardMenuItems(
-                                video = video,
-                                onWatchLater = onWatchLater,
-                            )
                             MoreMenu(
                                 onWatchLater = onWatchLater,
                                 onShare = { shareVideo(context, video) },
                                 items = cardMenuItems,
+                                tint = secondaryTextColor,
                                 buttonSize = metrics.moreButtonSize,
                                 iconSize = metrics.moreIconSize,
-                                iconTint = secondaryColor,
                             )
                         }
                     }
@@ -333,31 +364,23 @@ internal fun FeedCard(
             }
         }
 
-        val longPressItems = rememberVideoCardMenuItems(
-            video = video,
-            onWatchLater = onWatchLater,
-        )
         CouiPopupMenu(
             show = menuExpanded,
             onDismiss = { menuExpanded = false },
-            items = longPressItems,
+            items = cardMenuItems,
             preciseClickState = pressState,
         )
     }
 }
 
-private val CoverChipShape = SquircleShape(4.dp)
-private val CoverChipBackground = Color(0x80000000)
-
-/** 封面底部角标排布：优先完整展示「播放 + 弹幕 + 时长」，放不下时整项隐去弹幕而非截成省略号。 */
+/** 封面底部统计排布：优先完整展示「播放 + 弹幕 + 时长」，放不下时整项隐去弹幕而非截成省略号。 */
 @Composable
-private fun CoverBottomBadges(
+private fun CoverBottomStats(
     playText: String,
     danmakuText: String,
     durationText: String,
+    color: Color,
     metrics: FeedCardMetrics,
-    textColor: Color = Color.White,
-    chipBackground: Color = CoverChipBackground,
     modifier: Modifier = Modifier,
 ) {
     if (playText.isBlank() && danmakuText.isBlank() && durationText.isBlank()) return
@@ -366,28 +389,25 @@ private fun CoverBottomBadges(
         content = {
             if (playText.isNotBlank() && danmakuText.isNotBlank()) {
                 Box(Modifier.layoutId("playDm")) {
-                    CoverStats(playText, danmakuText, metrics.chipFontSize, metrics.chipIconSize, metrics.chipPaddingH, textColor, chipBackground)
+                    CoverStatGroup(playText, danmakuText, color, metrics)
                 }
             }
             if (playText.isNotBlank()) {
                 Box(Modifier.layoutId("playOnly")) {
-                    CoverStats(playText, "", metrics.chipFontSize, metrics.chipIconSize, metrics.chipPaddingH, textColor, chipBackground)
+                    CoverStatGroup(playText, "", color, metrics)
                 }
             } else if (danmakuText.isNotBlank()) {
                 Box(Modifier.layoutId("dmOnly")) {
-                    CoverStats("", danmakuText, metrics.chipFontSize, metrics.chipIconSize, metrics.chipPaddingH, textColor, chipBackground)
+                    CoverStatGroup("", danmakuText, color, metrics)
                 }
             }
             if (durationText.isNotBlank()) {
                 Box(Modifier.layoutId("dur")) {
                     Text(
                         text = durationText,
-                        modifier = Modifier
-                            .clip(CoverChipShape)
-                            .background(chipBackground)
-                            .padding(horizontal = metrics.chipPaddingH, vertical = 1.dp),
-                        fontSize = metrics.chipFontSize,
-                        color = textColor,
+                        fontSize = metrics.statFontSize,
+                        lineHeight = metrics.statLineHeight,
+                        color = color,
                         maxLines = 1,
                         softWrap = false,
                     )
@@ -395,7 +415,7 @@ private fun CoverBottomBadges(
             }
         },
     ) { measurables, constraints ->
-        val gapPx = metrics.chipGap.roundToPx()
+        val gapPx = 6.dp.roundToPx()
         val durPlaceable = measurables.firstOrNull { it.layoutId == "dur" }?.measure(Constraints())
         val durWidth = durPlaceable?.width ?: 0
         val leftBudget = (constraints.maxWidth - durWidth - if (durPlaceable != null) gapPx else 0).coerceAtLeast(0)
@@ -407,51 +427,52 @@ private fun CoverBottomBadges(
             ?.measure(Constraints(maxWidth = leftBudget))
         val height = maxOf(finalLeft?.height ?: 0, durPlaceable?.height ?: 0)
         layout(constraints.maxWidth, height) {
-            finalLeft?.placeRelative(0, height - finalLeft.height)
-            durPlaceable?.placeRelative(constraints.maxWidth - durWidth, height - durPlaceable.height)
+            finalLeft?.placeRelative(0, (height - finalLeft.height) / 2)
+            durPlaceable?.placeRelative(constraints.maxWidth - durWidth, (height - durPlaceable.height) / 2)
         }
     }
 }
 
-/** 封面左下角的统计角标：播放量与弹幕数放在同一枚半透明胶囊里，中间留 4dp 缝。 */
 @Composable
-private fun CoverStats(
+private fun CoverStatGroup(
     playText: String,
     danmakuText: String,
-    fontSize: TextUnit,
-    iconSize: Dp,
-    paddingHorizontal: Dp,
-    textColor: Color = Color.White,
-    chipBackground: Color = CoverChipBackground,
+    color: Color,
+    metrics: FeedCardMetrics,
 ) {
-    if (playText.isBlank() && danmakuText.isBlank()) return
-    Row(
-        modifier = Modifier
-            .clip(CoverChipShape)
-            .background(chipBackground)
-            .padding(horizontal = paddingHorizontal, vertical = 1.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         if (playText.isNotBlank()) {
-            Icon(COUIIcons.Play, null, Modifier.size(iconSize), tint = textColor)
-            Spacer(Modifier.width(2.dp))
+            Icon(
+                imageVector = COUIIcons.Play,
+                contentDescription = null,
+                modifier = Modifier.size(metrics.statIconSize),
+                tint = color,
+            )
+            Spacer(Modifier.width(3.dp))
             Text(
                 text = playText,
-                fontSize = fontSize,
-                color = textColor,
+                fontSize = metrics.statFontSize,
+                lineHeight = metrics.statLineHeight,
+                color = color,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
             )
         }
         if (danmakuText.isNotBlank()) {
-            if (playText.isNotBlank()) Spacer(Modifier.width(4.dp))
-            Icon(DanmakuStatIcon, null, Modifier.size(iconSize), tint = textColor)
-            Spacer(Modifier.width(2.dp))
+            if (playText.isNotBlank()) Spacer(Modifier.width(metrics.statGap))
+            Icon(
+                imageVector = DanmakuStatIcon,
+                contentDescription = null,
+                modifier = Modifier.size(metrics.statIconSize),
+                tint = color,
+            )
+            Spacer(Modifier.width(3.dp))
             Text(
                 text = danmakuText,
-                fontSize = fontSize,
-                color = textColor,
+                fontSize = metrics.statFontSize,
+                lineHeight = metrics.statLineHeight,
+                color = color,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
@@ -466,8 +487,8 @@ internal fun rememberVideoCardMenuItems(
     onWatchLater: () -> Unit,
 ): List<CouiMenuItem> {
     val context = LocalPlatformContext.current
-    val container = erl.bilico.di.LocalAppContainer.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val container = LocalAppContainer.current
+    val scope = rememberCoroutineScope()
     var showDislike by remember(video.bvid) { mutableStateOf(false) }
     var showReport by remember(video.bvid) { mutableStateOf(false) }
     var showKeyword by remember(video.bvid) { mutableStateOf(false) }
@@ -487,14 +508,14 @@ internal fun rememberVideoCardMenuItems(
     }
 
     if (showDislike) {
-        erl.bilico.ui.components.FeedDislikeDialog(
+        FeedDislikeDialog(
             video = video,
             onDismiss = { showDislike = false },
         )
     }
     if (showReport && video.aid > 0L) {
-        erl.bilico.ui.components.ReportDialog(
-            target = erl.bilico.ui.components.ReportTarget.Video(
+        ReportDialog(
+            target = ReportTarget.Video(
                 aid = video.aid,
                 bvid = video.bvid,
                 title = video.title,
@@ -503,15 +524,15 @@ internal fun rememberVideoCardMenuItems(
         )
     }
     if (showKeyword) {
-        erl.bilico.ui.components.KeywordBlockDialog(
+        KeywordBlockDialog(
             allowedScopes = listOf(
-                erl.bilico.data.repository.BlockKeywordScope.VIDEO_TITLE,
-                erl.bilico.data.repository.BlockKeywordScope.UP_NAME,
+                BlockKeywordScope.VIDEO_TITLE,
+                BlockKeywordScope.UP_NAME,
             ),
-            initialScope = erl.bilico.data.repository.BlockKeywordScope.VIDEO_TITLE,
+            initialScope = BlockKeywordScope.VIDEO_TITLE,
             scopeInitialKeywords = mapOf(
-                erl.bilico.data.repository.BlockKeywordScope.VIDEO_TITLE to video.title,
-                erl.bilico.data.repository.BlockKeywordScope.UP_NAME to video.upName,
+                BlockKeywordScope.VIDEO_TITLE to video.title,
+                BlockKeywordScope.UP_NAME to video.upName,
             ),
             onDismiss = { showKeyword = false },
         )
@@ -544,7 +565,10 @@ internal fun rememberVideoCardMenuItems(
                                             showToast(context, "已屏蔽 UP 主（已同步账号黑名单）")
                                         }.onFailure { err ->
                                             container.blocks.blockUserLocally(video.upMid, video.upName, video.upFace)
-                                            showToast(context, "已本地屏蔽 UP 主 ${video.upName}（云端同步失败：${err.message ?: "未知错误"}）")
+                                            showToast(
+                                                context,
+                                                "已本地屏蔽 UP 主 ${video.upName}（云端同步失败：${err.message ?: "未知错误"}）",
+                                            )
                                         }
                                     }
                                 } else {
@@ -569,9 +593,9 @@ internal fun MoreMenu(
     onWatchLater: () -> Unit,
     onShare: () -> Unit,
     items: List<CouiMenuItem>? = null,
+    tint: Color = COUITheme.colorScheme.onSurfaceSecondary,
     buttonSize: Dp = 20.dp,
     iconSize: Dp = 18.dp,
-    iconTint: Color = COUITheme.colorScheme.onSurfaceSecondary,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -592,7 +616,7 @@ internal fun MoreMenu(
                 imageVector = COUIIcons.More,
                 contentDescription = null,
                 modifier = Modifier.size(iconSize),
-                tint = iconTint,
+                tint = tint,
             )
         }
 
